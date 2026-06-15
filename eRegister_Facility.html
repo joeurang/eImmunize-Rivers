@@ -360,23 +360,37 @@ window.onload=()=>{loadLocal();if(facility.name)showApp();};
 function loadExisting(){loadLocal();if(facility.name)showApp();else alert('No facility data found.');}
 
 function setupFacility(){
-  const name=document.getElementById('s_name').value.trim();
-  const lga=document.getElementById('s_lga').value;
-  const focal=document.getElementById('s_focal').value.trim();
-  if(!name||!lga||!focal){alert('Facility Name, LGA and RI Focal Person are required.');return;}
-  facility={name,lga,ward:document.getElementById('s_ward').value.trim(),
-    focalPerson:focal,phone:document.getElementById('s_phone').value.trim(),
-    code:document.getElementById('s_code').value.trim()};
-  saveLocal();showApp();
+  try{
+    const name=document.getElementById('s_name').value.trim();
+    const lga=document.getElementById('s_lga').value;
+    const focal=document.getElementById('s_focal').value.trim();
+    if(!name||!lga||!focal){alert('Facility Name, LGA and RI Focal Person are required.');return;}
+    facility={name:name,lga:lga,ward:document.getElementById('s_ward').value.trim(),
+      focalPerson:focal,phone:document.getElementById('s_phone').value.trim(),
+      code:document.getElementById('s_code').value.trim()};
+    saveLocal();showApp();
+  }catch(err){
+    alert('Error opening register: '+err.message+'. Please try refreshing the page.');
+    console.error(err);
+  }
 }
 
 function showApp(){
-  document.getElementById('setup').style.display='none';
-  document.getElementById('app').style.display='block';
-  document.getElementById('hdr-fac').textContent=`${facility.name} · ${facility.lga} · ${facility.focalPerson}`;
-  document.getElementById('n_dt').value=today();
-  loadStockHistory();loadSessionLog();loadThresholds();loadExpiryDates();buildVchips();buildStockTable();renderReg();renderSum();
-  if(pending.length)flushPending();
+  try{
+    document.getElementById('setup').style.display='none';
+    document.getElementById('app').style.display='block';
+    document.getElementById('hdr-fac').textContent=facility.name+' · '+facility.lga+' · '+facility.focalPerson;
+    document.getElementById('n_dt').value=today();
+    loadStockHistory();loadSessionLog();loadThresholds();loadExpiryDates();
+    buildVchips();
+    renderReg();
+    renderSum();
+    buildStockTable();
+    if(pending.length)flushPending();
+  }catch(err){
+    alert('Error loading register: '+err.message);
+    console.error(err);
+  }
 }
 
 function showTab(name){
@@ -507,8 +521,8 @@ function clearForm(){
 }
 
 function renderReg(){
-  const srch=(document.getElementById('srch')?.value||'').toLowerCase();
-  const filt=document.getElementById('filt')?.value||'';
+  const srch=((document.getElementById('srch')||{}).value||'').toLowerCase();
+  const filt=(document.getElementById('filt')||{}).value||'';
   const t=today();
   let rows=children.filter(c=>{
     if(srch&&!c.child_full_name?.toLowerCase().includes(srch)&&!c.id?.toLowerCase().includes(srch))return false;
@@ -575,7 +589,7 @@ document.getElementById('child-ov').addEventListener('click',function(e){if(e.ta
 function delChild(id){if(!confirm('Delete this record?'))return;children=children.filter(c=>c.id!==id);saveLocal();closeMod();renderReg();toast('Record deleted');}
 
 function renderSum(){
-  const dt=document.getElementById('sum-dt')?.value||'';
+  const dt=(document.getElementById('sum-dt')||{}).value||'';
   const rows=dt?children.filter(c=>c.session_date===dt):children;
   const doses=rows.reduce((s,c)=>{const a=Array.isArray(c.vaccines)?c.vaccines:(typeof c.vaccines==='string'?JSON.parse(c.vaccines||'[]'):[]);return s+a.length;},0);
   document.getElementById('sum-stats').innerHTML=`
@@ -689,7 +703,7 @@ function renderReorderAlerts(period){
 function buildStockTable(){
   loadStockHistory();loadSessionLog();loadThresholds();loadExpiryDates();
   populateMonthSelect();
-  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  const stkMonthEl=document.getElementById('stk-month');const period=stkMonthEl?stkMonthEl.value||currentPeriod():currentPeriod();
   renderReorderAlerts(period);
 
   const totalOpen =SGRP.reduce(function(s,g){const st=stock[g.id]||{};return s+(parseInt(st.open)||0);},0);
@@ -728,36 +742,41 @@ function buildStockTable(){
   const tbody=document.getElementById('stk-body');
   if(!tbody) return;
   tbody.innerHTML=SGRP.map(function(g){
-    const s=stock[g.id]||{open:0,recv:0,waste:0};
-    const uP=usedD(g.id,period),uT=usedDToday(g.id);
-    const open=parseInt(s.open)||0,recv=parseInt(s.recv)||0,waste=parseInt(s.waste)||0;
-    const cl=open+recv-uP-waste;
-    const tot=uP+waste,wr=tot>0?((waste/tot)*100).toFixed(1):'0.0';
-    const thresh=thresholds[g.id]||10;
-    const exp=expiryDates[g.id]||'';
-    const expExpired=exp&&new Date(exp)<now;
-    const expSoon=exp&&!expExpired&&new Date(exp)<=new Date(now.getTime()+30*86400000);
-    let status,sc;
+    var s=stock[g.id]||{open:0,recv:0,waste:0};
+    var uP=usedD(g.id,period),uT=usedDToday(g.id);
+    var open=parseInt(s.open)||0,recv=parseInt(s.recv)||0,waste=parseInt(s.waste)||0;
+    var cl=open+recv-uP-waste;
+    var tot=uP+waste,wr=tot>0?((waste/tot)*100).toFixed(1):'0.0';
+    var thresh=thresholds[g.id]||10;
+    var exp=expiryDates[g.id]||'';
+    var expExpired=exp&&new Date(exp)<now;
+    var expSoon=exp&&!expExpired&&new Date(exp)<=new Date(now.getTime()+30*86400000);
+    var status,sc;
     if(cl<0){status='Stockout';sc='bg-r';}
     else if(cl<thresh){status='Low Stock';sc='bg-r';}
     else if(cl<thresh*2){status='Moderate';sc='bg-a';}
     else{status='Adequate';sc='bg-g';}
-    const reorder=cl<thresh?'<span class="badge bg-r">REORDER</span>':'<span class="badge bg-g">OK</span>';
-    const expStyle='width:120px;border:1.5px solid '+(expExpired?'var(--red)':expSoon?'var(--amber)':'var(--line)')+';border-radius:4px;padding:5px 6px;font-size:11px;background:'+(expExpired?'var(--redl)':expSoon?'var(--amberl)':'var(--bg)')+';';
-    return '<tr>'
-      +'<td><span class="bold">'+g.name+'</span></td>'
-      +'<td><input type="number" id="sk_'+g.id+'_th" value="'+thresh+'" min="0" style="width:60px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;background:var(--bg);" oninput="saveThresh(''+g.id+'')"/></td>'
-      +'<td><input type="date" id="sk_'+g.id+'_exp" value="'+exp+'" style="'+expStyle+'" onchange="saveExpiry(''+g.id+'');buildStockTable();"/></td>'
-      +'<td><input type="number" id="sk_'+g.id+'_o" value="'+open+'" min="0" style="width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;background:var(--bg);" oninput="calcSR(''+g.id+'')"/></td>'
-      +'<td><input type="number" id="sk_'+g.id+'_r" value="'+recv+'" min="0" style="width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;background:var(--bg);" oninput="calcSR(''+g.id+'')"/></td>'
-      +'<td style="font-weight:700;color:var(--mint);border-left:1px solid var(--line);" id="sk_'+g.id+'_utd">'+uT+'</td>'
-      +'<td style="font-weight:700;color:var(--teal);" id="sk_'+g.id+'_u">'+uP+'</td>'
-      +'<td style="border-left:1px solid var(--line);"><input type="number" id="sk_'+g.id+'_w" value="'+waste+'" min="0" style="width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;background:var(--bg);" oninput="calcSR(''+g.id+'')"/></td>'
-      +'<td id="sk_'+g.id+'_c" style="font-weight:900;font-size:15px;border-left:1px solid var(--line);color:'+(cl<0?'var(--red)':cl<thresh?'var(--amber)':'var(--green)')+'">'+cl+'</td>'
-      +'<td><span class="badge '+(parseFloat(wr)>25?'bg-r':parseFloat(wr)>15?'bg-a':'bg-g')+'">'+wr+'%</span></td>'
-      +'<td><span class="badge '+sc+'">'+status+'</span></td>'
-      +'<td>'+reorder+'</td>'
-      +'</tr>';
+    var reorder=cl<thresh?'<span class=\"badge bg-r\">REORDER</span>':'<span class=\"badge bg-g\">OK</span>';
+    var expBorder=expExpired?'var(--red)':expSoon?'var(--amber)':'var(--line)';
+    var expBg=expExpired?'var(--redl)':expSoon?'var(--amberl)':'var(--bg)';
+    var clColor=cl<0?'var(--red)':cl<thresh?'var(--amber)':'var(--green)';
+    var wrClass=parseFloat(wr)>25?'bg-r':parseFloat(wr)>15?'bg-a':'bg-g';
+    var row=document.createElement('tr');
+    row.innerHTML=[
+      '<td><span style=\"font-weight:700\">'+g.name+'</span></td>',
+      '<td><input type=\"number\" id=\"sk_'+g.id+'_th\" value=\"'+thresh+'\" min=\"0\" style=\"width:60px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;\" onchange=\"saveThreshById(this)\"/></td>',
+      '<td><input type=\"date\" id=\"sk_'+g.id+'_exp\" value=\"'+exp+'\" style=\"width:120px;border:1.5px solid '+expBorder+';border-radius:4px;padding:5px 6px;font-size:11px;background:'+expBg+';\" onchange=\"saveExpiryById(this)\"/></td>',
+      '<td><input type=\"number\" id=\"sk_'+g.id+'_o\" value=\"'+open+'\" min=\"0\" style=\"width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;\" onchange=\"calcSR(\\\"'+g.id+'\\\")\"/></td>',
+      '<td><input type=\"number\" id=\"sk_'+g.id+'_r\" value=\"'+recv+'\" min=\"0\" style=\"width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;\" onchange=\"calcSR(\\\"'+g.id+'\\\")\"/></td>',
+      '<td style=\"font-weight:700;color:var(--mint);border-left:1px solid var(--line)\" id=\"sk_'+g.id+'_utd\">'+uT+'</td>',
+      '<td style=\"font-weight:700;color:var(--teal)\" id=\"sk_'+g.id+'_u\">'+uP+'</td>',
+      '<td style=\"border-left:1px solid var(--line)\"><input type=\"number\" id=\"sk_'+g.id+'_w\" value=\"'+waste+'\" min=\"0\" style=\"width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;\" onchange=\"calcSR(\\\"'+g.id+'\\\")\"/></td>',
+      '<td id=\"sk_'+g.id+'_c\" style=\"font-weight:900;font-size:15px;border-left:1px solid var(--line);color:'+clColor+'\">'+cl+'</td>',
+      '<td><span class=\"badge '+wrClass+'\">'+wr+'%</span></td>',
+      '<td><span class=\"badge '+sc+'\">'+status+'</span></td>',
+      '<td>'+reorder+'</td>',
+    ].join('');
+    return row.outerHTML;
   }).join('');
 
   const tfoot=document.getElementById('stk-foot');
@@ -775,11 +794,25 @@ function buildStockTable(){
   renderStockHistory();
 }
 
+function saveThreshById(el){
+  var id=el.id.replace('sk_','').replace('_th','');
+  loadThresholds();
+  thresholds[id]=parseInt(el.value||10);
+  saveThresholds();
+  buildStkSummaryOnly();
+}
 function saveThresh(gid){
   loadThresholds();
   thresholds[gid]=parseInt(document.getElementById('sk_'+gid+'_th')?.value||10);
   saveThresholds();
   buildStkSummaryOnly();
+}
+function saveExpiryById(el){
+  var id=el.id.replace('sk_','').replace('_exp','');
+  loadExpiryDates();
+  expiryDates[id]=el.value||'';
+  saveExpiryDates();
+  buildStockTable();
 }
 function saveExpiry(gid){
   loadExpiryDates();
@@ -799,7 +832,7 @@ function calcSR(gid){
   buildStkSummaryOnly();
 }
 function buildStkSummaryOnly(){
-  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  const stkMonthEl=document.getElementById('stk-month');const period=stkMonthEl?stkMonthEl.value||currentPeriod():currentPeriod();
   const tO=SGRP.reduce(function(s,g){return s+(+(document.getElementById('sk_'+g.id+'_o')?.value||0));},0);
   const tR=SGRP.reduce(function(s,g){return s+(+(document.getElementById('sk_'+g.id+'_r')?.value||0));},0);
   const tU=SGRP.reduce(function(s,g){return s+usedD(g.id,period);},0);
@@ -826,7 +859,7 @@ function logSessionStock(){
   if(!todayC.length){toast('No children vaccinated today to log');return;}
   const snap={
     loggedAt:new Date().toISOString(),sessionDate:t,
-    period:document.getElementById('stk-month')?.value||currentPeriod(),
+    period:(document.getElementById('stk-month')||{}).value||currentPeriod(),
     childrenToday:todayC.length,
     zeroDoseToday:todayC.filter(function(c){return c.zero_dose==='Yes';}).length,
     dosesUsed:{},closingBalance:{},
@@ -870,7 +903,7 @@ function renderSessionLog(){
 }
 
 function saveStock(){
-  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  const stkMonthEl=document.getElementById('stk-month');const period=stkMonthEl?stkMonthEl.value||currentPeriod():currentPeriod();
   loadThresholds();loadExpiryDates();
   SGRP.forEach(function(g){
     stock[g.id]={
@@ -949,7 +982,7 @@ async function pushStockSB(period){
 
 function resetStock(){
   if(!confirm('Start a new period? Closing balances carry forward as new opening balances.')) return;
-  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  const stkMonthEl=document.getElementById('stk-month');const period=stkMonthEl?stkMonthEl.value||currentPeriod():currentPeriod();
   SGRP.forEach(function(g){
     const s=stock[g.id]||{open:0,recv:0,waste:0};
     const cl=(parseInt(s.open)||0)+(parseInt(s.recv)||0)-usedD(g.id,period)-(parseInt(s.waste)||0);
@@ -987,7 +1020,7 @@ function renderStockHistory(){
 }
 
 function printStock(){
-  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  const stkMonthEl=document.getElementById('stk-month');const period=stkMonthEl?stkMonthEl.value||currentPeriod():currentPeriod();
   const win=window.open('','_blank');
   const now=new Date();
   const rows=SGRP.map(function(g){

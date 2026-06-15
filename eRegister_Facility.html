@@ -235,15 +235,69 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
     </div>
 
     <div class="panel" id="panel-stk">
+
+      <!-- REORDER ALERTS -->
+      <div id="stk-alerts" style="margin-bottom:14px;"></div>
+
+      <!-- SUMMARY CARDS -->
+      <div id="stk-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px;"></div>
+
+      <!-- MAIN LEDGER -->
       <div class="card">
-        <div class="ch">Vaccine Stock — Current Inventory</div>
-        <p class="sm muted mb12">Doses Used auto-pulled from the register. Update Opening Balance and Received after each collection from LGA store.</p>
-        <div class="tw"><table class="rt" style="min-width:640px;">
-          <thead><tr><th>Vaccine</th><th>Opening Balance</th><th>Received</th><th>Used (register)</th><th>Discarded</th><th>Closing</th><th>Wastage %</th></tr></thead>
+        <div class="ch" style="justify-content:space-between;">
+          <span style="display:flex;align-items:center;gap:8px;"><span style="width:4px;height:14px;background:var(--mint);border-radius:2px;display:inline-block;"></span>Vaccine Stock Ledger</span>
+          <div class="flex gap8">
+            <select id="stk-month" style="border:1.5px solid var(--line);border-radius:var(--r2);padding:5px 10px;font-size:12px;background:var(--bg);" onchange="buildStockTable()"></select>
+            <button class="btn btn-o btn-sm" onclick="printStock()">🖨 Print</button>
+          </div>
+        </div>
+        <p class="sm muted mb12">Opening Balance and Received are entered manually. Doses Used pull automatically from the register. Closing Balance, Wastage Rate and Stock Status are calculated automatically.</p>
+        <div class="tw">
+        <table class="rt" style="min-width:1000px;" id="stk-tbl">
+          <thead>
+            <tr style="background:var(--teal);">
+              <th rowspan="2">Vaccine</th>
+              <th rowspan="2">Min. Stock<br>Threshold</th>
+              <th rowspan="2">Expiry<br>Date</th>
+              <th rowspan="2">Opening<br>Balance</th>
+              <th rowspan="2">Received<br>This Period</th>
+              <th colspan="2" style="text-align:center;border-left:1px solid rgba(255,255,255,0.2);">Doses Used (Auto)</th>
+              <th rowspan="2" style="border-left:1px solid rgba(255,255,255,0.2);">Discarded/<br>Wasted</th>
+              <th rowspan="2" style="border-left:1px solid rgba(255,255,255,0.2);">Closing<br>Balance</th>
+              <th rowspan="2">Wastage<br>Rate %</th>
+              <th rowspan="2">Stock Status</th>
+              <th rowspan="2">Reorder<br>Alert</th>
+            </tr>
+            <tr style="background:#004A42;">
+              <th style="font-size:10px;border-left:1px solid rgba(255,255,255,0.2);">Today</th>
+              <th style="font-size:10px;">This Period</th>
+            </tr>
+          </thead>
           <tbody id="stk-body"></tbody>
-        </table></div>
-        <button class="btn btn-p mt12" onclick="saveStock()">💾 Save Stock</button>
+          <tfoot id="stk-foot"></tfoot>
+        </table>
+        </div>
+        <div class="flex gap8 mt12 fw">
+          <button class="btn btn-p" onclick="saveStock()">💾 Save Stock Update</button>
+          <button class="btn btn-o" onclick="resetStock()">↺ Reset Period</button>
+          <button class="btn btn-o" onclick="logSessionStock()">📋 Log This Session</button>
+        </div>
+        <div id="stk-saved-msg" class="sm muted mt8"></div>
       </div>
+
+      <!-- SESSION LOG -->
+      <div class="card">
+        <div class="ch"><span style="display:flex;align-items:center;gap:8px;"><span style="width:4px;height:14px;background:var(--mint);border-radius:2px;display:inline-block;"></span>Session-by-Session Stock Log</span></div>
+        <p class="sm muted mb12">A snapshot of stock used is recorded each time you tap <b>Log This Session</b> after a vaccination session.</p>
+        <div id="stk-session-log"></div>
+      </div>
+
+      <!-- MONTHLY HISTORY -->
+      <div class="card">
+        <div class="ch"><span style="display:flex;align-items:center;gap:8px;"><span style="width:4px;height:14px;background:var(--mint);border-radius:2px;display:inline-block;"></span>Stock History — Previous Periods</span></div>
+        <div id="stk-history"></div>
+      </div>
+
     </div>
 
   </div>
@@ -321,7 +375,7 @@ function showApp(){
   document.getElementById('app').style.display='block';
   document.getElementById('hdr-fac').textContent=`${facility.name} · ${facility.lga} · ${facility.focalPerson}`;
   document.getElementById('n_dt').value=today();
-  buildVchips();buildStockTable();renderReg();renderSum();
+  loadStockHistory();loadSessionLog();loadThresholds();loadExpiryDates();buildVchips();buildStockTable();renderReg();renderSum();
   if(pending.length)flushPending();
 }
 
@@ -416,6 +470,8 @@ async function saveChild(){
     toast('✓ Saved — will sync when connected');
   }
   clearForm();showTab('reg');
+  // Auto-refresh stock balances after every vaccination
+  if(document.getElementById('panel-stk').classList.contains('on')) buildStockTable();
 }
 
 async function pushSB(rec){
@@ -539,32 +595,433 @@ function renderSum(){
   document.getElementById('tally').innerHTML=VAX.map(v=>`<div class="tc"><div class="tcn">${v.name}</div><div class="tcv">${cnt[v.id]||0}</div><div class="tcs">${v.sub}</div></div>`).join('');
 }
 
-function usedD(gid){
+// ═══ STOCK MANAGEMENT — FULL ENHANCED VERSION ═══
+const SK_STKH  = 'eimm_stk_history';
+const SK_STKSN = 'eimm_stk_sessions';
+const SK_STKTH = 'eimm_stk_thresh';
+const SK_STKEX = 'eimm_stk_expiry';
+
+let stockHistory = [];
+let sessionLog   = [];
+let thresholds   = {};
+let expiryDates  = {};
+
+function loadStockHistory(){ stockHistory = JSON.parse(localStorage.getItem(SK_STKH)||'[]'); }
+function saveStockHistory(){ localStorage.setItem(SK_STKH, JSON.stringify(stockHistory)); }
+function loadSessionLog()  { sessionLog   = JSON.parse(localStorage.getItem(SK_STKSN)||'[]'); }
+function saveSessionLog()  { localStorage.setItem(SK_STKSN, JSON.stringify(sessionLog)); }
+function loadThresholds()  { thresholds   = JSON.parse(localStorage.getItem(SK_STKTH)||'{}'); }
+function saveThresholds()  { localStorage.setItem(SK_STKTH, JSON.stringify(thresholds)); }
+function loadExpiryDates() { expiryDates  = JSON.parse(localStorage.getItem(SK_STKEX)||'{}'); }
+function saveExpiryDates() { localStorage.setItem(SK_STKEX, JSON.stringify(expiryDates)); }
+
+function currentPeriod(){
+  const d=new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function periodLabel(p){
+  if(!p) return '—';
+  const parts=p.split('-');
+  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[parseInt(parts[1])-1]+' '+parts[0];
+}
+function populateMonthSelect(){
+  const sel=document.getElementById('stk-month');
+  if(!sel) return;
+  const opts=[];
+  for(let i=0;i<6;i++){
+    const d=new Date(); d.setMonth(d.getMonth()-i);
+    const val=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    opts.push('<option value="'+val+'"'+(i===0?' selected':'')+'>'+periodLabel(val)+(i===0?' (Current)':'')+'</option>');
+  }
+  sel.innerHTML=opts.join('');
+}
+function usedD(gid, periodFilter){
   const pfx=DPFX[gid]||[gid];
-  return children.reduce((s,c)=>{const a=Array.isArray(c.vaccines)?c.vaccines:(typeof c.vaccines==='string'?JSON.parse(c.vaccines||'[]'):[]);return s+a.filter(v=>pfx.includes(v.id)).length;},0);
+  let rows=children;
+  if(periodFilter) rows=children.filter(function(c){return (c.session_date||'').startsWith(periodFilter);});
+  return rows.reduce(function(s,c){
+    const a=Array.isArray(c.vaccines)?c.vaccines:(typeof c.vaccines==='string'?JSON.parse(c.vaccines||'[]'):[]);
+    return s+a.filter(function(v){return pfx.includes(v.id);}).length;
+  },0);
+}
+function usedDToday(gid){
+  const pfx=DPFX[gid]||[gid],t=today();
+  return children.filter(function(c){return c.session_date===t;}).reduce(function(s,c){
+    const a=Array.isArray(c.vaccines)?c.vaccines:(typeof c.vaccines==='string'?JSON.parse(c.vaccines||'[]'):[]);
+    return s+a.filter(function(v){return pfx.includes(v.id);}).length;
+  },0);
+}
+
+function renderReorderAlerts(period){
+  const el=document.getElementById('stk-alerts');
+  if(!el) return;
+  const alerts=[];
+  const now=new Date();
+  const soon=new Date(now.getTime()+30*86400000);
+  SGRP.forEach(function(g){
+    const s=stock[g.id]||{open:0,recv:0,waste:0};
+    const u=usedD(g.id,period);
+    const cl=(parseInt(s.open)||0)+(parseInt(s.recv)||0)-u-(parseInt(s.waste)||0);
+    const thresh=thresholds[g.id]||10;
+    const exp=expiryDates[g.id]||'';
+    if(cl<=0 && ((parseInt(s.open)||0)+(parseInt(s.recv)||0))>0)
+      alerts.push({level:'c',msg:'<b>'+g.name+'</b> — STOCKOUT. Closing balance: '+cl+'. Order immediately.'});
+    else if(cl>0 && cl<thresh)
+      alerts.push({level:'w',msg:'<b>'+g.name+'</b> — Low stock. '+cl+' doses remaining (threshold: '+thresh+'). Consider reordering.'});
+    if(exp){
+      const expDate=new Date(exp);
+      if(expDate<now)
+        alerts.push({level:'c',msg:'<b>'+g.name+'</b> — EXPIRED on '+fmtD(exp)+'. Do NOT use. Discard and report.'});
+      else if(expDate<=soon)
+        alerts.push({level:'w',msg:'<b>'+g.name+'</b> — Expires soon: '+fmtD(exp)+'. Prioritise use or return to store.'});
+    }
+  });
+  if(!alerts.length){
+    el.innerHTML='<div style="background:var(--greenl);border-left:4px solid var(--green);border-radius:var(--r2);padding:10px 14px;margin-bottom:8px;font-size:13px;color:var(--green);">✓ No stock alerts — all vaccines within safe levels and within expiry</div>';
+    return;
+  }
+  el.innerHTML=alerts.map(function(a){
+    return '<div style="background:'+(a.level==='c'?'var(--redl)':'var(--amberl)')+';border-left:4px solid '+(a.level==='c'?'var(--red)':'var(--amber)')+';border-radius:var(--r2);padding:10px 14px;margin-bottom:8px;font-size:13px;">'+(a.level==='c'?'🚨 ':'⚡ ')+a.msg+'</div>';
+  }).join('');
 }
 
 function buildStockTable(){
-  document.getElementById('stk-body').innerHTML=SGRP.map(g=>{
+  loadStockHistory();loadSessionLog();loadThresholds();loadExpiryDates();
+  populateMonthSelect();
+  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  renderReorderAlerts(period);
+
+  const totalOpen =SGRP.reduce(function(s,g){const st=stock[g.id]||{};return s+(parseInt(st.open)||0);},0);
+  const totalRecv =SGRP.reduce(function(s,g){const st=stock[g.id]||{};return s+(parseInt(st.recv)||0);},0);
+  const totalUsed =SGRP.reduce(function(s,g){return s+usedD(g.id,period);},0);
+  const totalWaste=SGRP.reduce(function(s,g){const st=stock[g.id]||{};return s+(parseInt(st.waste)||0);},0);
+  const totalClose=totalOpen+totalRecv-totalUsed-totalWaste;
+  const totalWR   =(totalUsed+totalWaste)>0?((totalWaste/(totalUsed+totalWaste))*100).toFixed(1):'0.0';
+  const now=new Date();
+  const lowN=SGRP.filter(function(g){
+    const st=stock[g.id]||{};
+    const cl=(parseInt(st.open)||0)+(parseInt(st.recv)||0)-usedD(g.id,period)-(parseInt(st.waste)||0);
+    return cl>=0&&cl<(thresholds[g.id]||10)&&((parseInt(st.open)||0)+(parseInt(st.recv)||0))>0;
+  }).length;
+  const outN=SGRP.filter(function(g){
+    const st=stock[g.id]||{};
+    const cl=(parseInt(st.open)||0)+(parseInt(st.recv)||0)-usedD(g.id,period)-(parseInt(st.waste)||0);
+    return cl<0&&((parseInt(st.open)||0)+(parseInt(st.recv)||0))>0;
+  }).length;
+  const expN=SGRP.filter(function(g){return expiryDates[g.id]&&new Date(expiryDates[g.id])<now;}).length;
+
+  const sumEl=document.getElementById('stk-summary');
+  if(sumEl) sumEl.innerHTML=[
+    ['Opening Stock',totalOpen,'var(--teal)'],
+    ['Received',totalRecv,'var(--green)'],
+    ['Used This Period',totalUsed,'var(--mint)'],
+    ['Wasted/Discarded',totalWaste,'var(--amber)'],
+    ['Closing Balance',totalClose,totalClose<0?'var(--red)':'var(--green)'],
+    ['Wastage Rate',totalWR+'%',parseFloat(totalWR)>25?'var(--red)':parseFloat(totalWR)>15?'var(--amber)':'var(--green)'],
+    ['Low Stock',lowN,lowN>0?'var(--amber)':'var(--green)'],
+    ['Stockouts / Expired',outN+expN,(outN+expN)>0?'var(--red)':'var(--green)'],
+  ].map(function(item){
+    return '<div style="background:var(--white);border-radius:var(--r);padding:12px 14px;box-shadow:var(--shadow);border-top:3px solid '+item[2]+';"><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;">'+item[0]+'</div><div style="font-size:20px;font-weight:900;color:'+item[2]+'">'+item[1]+'</div></div>';
+  }).join('');
+
+  const tbody=document.getElementById('stk-body');
+  if(!tbody) return;
+  tbody.innerHTML=SGRP.map(function(g){
     const s=stock[g.id]||{open:0,recv:0,waste:0};
-    const u=usedD(g.id),cl=(parseInt(s.open)||0)+(parseInt(s.recv)||0)-u-(parseInt(s.waste)||0);
-    const tot=u+(parseInt(s.waste)||0),wr=tot>0?(((parseInt(s.waste)||0)/tot)*100).toFixed(1):'0.0';
-    return`<tr><td class="bold">${g.name}</td>
-      <td><input type="number" id="sk_${g.id}_o" value="${s.open||0}" min="0" style="width:70px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;" oninput="calcSR('${g.id}')"/></td>
-      <td><input type="number" id="sk_${g.id}_r" value="${s.recv||0}" min="0" style="width:70px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;" oninput="calcSR('${g.id}')"/></td>
-      <td id="sk_${g.id}_u" style="font-weight:700;color:var(--teal)">${u}</td>
-      <td><input type="number" id="sk_${g.id}_w" value="${s.waste||0}" min="0" style="width:70px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;" oninput="calcSR('${g.id}')"/></td>
-      <td id="sk_${g.id}_c" style="font-weight:700;color:${cl<0?'var(--red)':'var(--green)'}">${cl}</td>
-      <td><span class="badge ${parseFloat(wr)>25?'bg-r':parseFloat(wr)>15?'bg-a':'bg-g'}">${wr}%</span></td>
-    </tr>`;}).join('');
+    const uP=usedD(g.id,period),uT=usedDToday(g.id);
+    const open=parseInt(s.open)||0,recv=parseInt(s.recv)||0,waste=parseInt(s.waste)||0;
+    const cl=open+recv-uP-waste;
+    const tot=uP+waste,wr=tot>0?((waste/tot)*100).toFixed(1):'0.0';
+    const thresh=thresholds[g.id]||10;
+    const exp=expiryDates[g.id]||'';
+    const expExpired=exp&&new Date(exp)<now;
+    const expSoon=exp&&!expExpired&&new Date(exp)<=new Date(now.getTime()+30*86400000);
+    let status,sc;
+    if(cl<0){status='Stockout';sc='bg-r';}
+    else if(cl<thresh){status='Low Stock';sc='bg-r';}
+    else if(cl<thresh*2){status='Moderate';sc='bg-a';}
+    else{status='Adequate';sc='bg-g';}
+    const reorder=cl<thresh?'<span class="badge bg-r">REORDER</span>':'<span class="badge bg-g">OK</span>';
+    const expStyle='width:120px;border:1.5px solid '+(expExpired?'var(--red)':expSoon?'var(--amber)':'var(--line)')+';border-radius:4px;padding:5px 6px;font-size:11px;background:'+(expExpired?'var(--redl)':expSoon?'var(--amberl)':'var(--bg)')+';';
+    return '<tr>'
+      +'<td><span class="bold">'+g.name+'</span></td>'
+      +'<td><input type="number" id="sk_'+g.id+'_th" value="'+thresh+'" min="0" style="width:60px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;background:var(--bg);" oninput="saveThresh(''+g.id+'')"/></td>'
+      +'<td><input type="date" id="sk_'+g.id+'_exp" value="'+exp+'" style="'+expStyle+'" onchange="saveExpiry(''+g.id+'');buildStockTable();"/></td>'
+      +'<td><input type="number" id="sk_'+g.id+'_o" value="'+open+'" min="0" style="width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;background:var(--bg);" oninput="calcSR(''+g.id+'')"/></td>'
+      +'<td><input type="number" id="sk_'+g.id+'_r" value="'+recv+'" min="0" style="width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;background:var(--bg);" oninput="calcSR(''+g.id+'')"/></td>'
+      +'<td style="font-weight:700;color:var(--mint);border-left:1px solid var(--line);" id="sk_'+g.id+'_utd">'+uT+'</td>'
+      +'<td style="font-weight:700;color:var(--teal);" id="sk_'+g.id+'_u">'+uP+'</td>'
+      +'<td style="border-left:1px solid var(--line);"><input type="number" id="sk_'+g.id+'_w" value="'+waste+'" min="0" style="width:72px;border:1.5px solid var(--line);border-radius:4px;padding:5px 6px;font-size:12px;background:var(--bg);" oninput="calcSR(''+g.id+'')"/></td>'
+      +'<td id="sk_'+g.id+'_c" style="font-weight:900;font-size:15px;border-left:1px solid var(--line);color:'+(cl<0?'var(--red)':cl<thresh?'var(--amber)':'var(--green)')+'">'+cl+'</td>'
+      +'<td><span class="badge '+(parseFloat(wr)>25?'bg-r':parseFloat(wr)>15?'bg-a':'bg-g')+'">'+wr+'%</span></td>'
+      +'<td><span class="badge '+sc+'">'+status+'</span></td>'
+      +'<td>'+reorder+'</td>'
+      +'</tr>';
+  }).join('');
+
+  const tfoot=document.getElementById('stk-foot');
+  if(tfoot) tfoot.innerHTML='<tr style="background:var(--teal);color:#fff;font-weight:700;">'
+    +'<td colspan="3">TOTALS</td>'
+    +'<td>'+totalOpen+'</td><td>'+totalRecv+'</td>'
+    +'<td style="border-left:1px solid rgba(255,255,255,0.2);">'+SGRP.reduce(function(s,g){return s+usedDToday(g.id);},0)+'</td>'
+    +'<td>'+totalUsed+'</td>'
+    +'<td style="border-left:1px solid rgba(255,255,255,0.2);">'+totalWaste+'</td>'
+    +'<td style="border-left:1px solid rgba(255,255,255,0.2);font-size:15px;">'+totalClose+'</td>'
+    +'<td><span style="background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:10px;font-size:11px;">'+totalWR+'%</span></td>'
+    +'<td colspan="2"></td></tr>';
+
+  renderSessionLog();
+  renderStockHistory();
+}
+
+function saveThresh(gid){
+  loadThresholds();
+  thresholds[gid]=parseInt(document.getElementById('sk_'+gid+'_th')?.value||10);
+  saveThresholds();
+  buildStkSummaryOnly();
+}
+function saveExpiry(gid){
+  loadExpiryDates();
+  expiryDates[gid]=document.getElementById('sk_'+gid+'_exp')?.value||'';
+  saveExpiryDates();
 }
 function calcSR(gid){
-  const o=+document.getElementById(`sk_${gid}_o`)?.value||0,r=+document.getElementById(`sk_${gid}_r`)?.value||0;
-  const u=+document.getElementById(`sk_${gid}_u`)?.textContent||0,w=+document.getElementById(`sk_${gid}_w`)?.value||0;
-  const cl=o+r-u-w,tot=u+w,wr=tot>0?((w/tot)*100).toFixed(1):'0.0';
-  const ce=document.getElementById(`sk_${gid}_c`);if(ce){ce.textContent=cl;ce.style.color=cl<0?'var(--red)':'var(--green)';}
+  const o=+(document.getElementById('sk_'+gid+'_o')?.value||0);
+  const r=+(document.getElementById('sk_'+gid+'_r')?.value||0);
+  const u=+(document.getElementById('sk_'+gid+'_u')?.textContent||0);
+  const w=+(document.getElementById('sk_'+gid+'_w')?.value||0);
+  const cl=o+r-u-w;
+  const tot=u+w,wr=tot>0?((w/tot)*100).toFixed(1):'0.0';
+  const ce=document.getElementById('sk_'+gid+'_c');
+  const thresh=thresholds[gid]||10;
+  if(ce){ce.textContent=cl;ce.style.color=cl<0?'var(--red)':cl<thresh?'var(--amber)':'var(--green)';}
+  buildStkSummaryOnly();
 }
-function saveStock(){SGRP.forEach(g=>{stock[g.id]={open:+document.getElementById(`sk_${g.id}_o`)?.value||0,recv:+document.getElementById(`sk_${g.id}_r`)?.value||0,waste:+document.getElementById(`sk_${g.id}_w`)?.value||0};});saveLocal();toast('✓ Stock saved');}
+function buildStkSummaryOnly(){
+  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  const tO=SGRP.reduce(function(s,g){return s+(+(document.getElementById('sk_'+g.id+'_o')?.value||0));},0);
+  const tR=SGRP.reduce(function(s,g){return s+(+(document.getElementById('sk_'+g.id+'_r')?.value||0));},0);
+  const tU=SGRP.reduce(function(s,g){return s+usedD(g.id,period);},0);
+  const tW=SGRP.reduce(function(s,g){return s+(+(document.getElementById('sk_'+g.id+'_w')?.value||0));},0);
+  const tC=tO+tR-tU-tW;
+  const tWR=(tU+tW)>0?((tW/(tU+tW))*100).toFixed(1):'0.0';
+  const lowN=SGRP.filter(function(g){const cl=+(document.getElementById('sk_'+g.id+'_c')?.textContent||0);const thresh=thresholds[g.id]||10;return cl>=0&&cl<thresh&&(+(document.getElementById('sk_'+g.id+'_o')?.value||0)+(+(document.getElementById('sk_'+g.id+'_r')?.value||0)))>0;}).length;
+  const outN=SGRP.filter(function(g){const cl=+(document.getElementById('sk_'+g.id+'_c')?.textContent||0);return cl<0&&(+(document.getElementById('sk_'+g.id+'_o')?.value||0)+(+(document.getElementById('sk_'+g.id+'_r')?.value||0)))>0;}).length;
+  const sumEl=document.getElementById('stk-summary');
+  if(sumEl) sumEl.innerHTML=[
+    ['Opening Stock',tO,'var(--teal)'],['Received',tR,'var(--green)'],
+    ['Used This Period',tU,'var(--mint)'],['Wasted/Discarded',tW,'var(--amber)'],
+    ['Closing Balance',tC,tC<0?'var(--red)':'var(--green)'],
+    ['Wastage Rate',tWR+'%',parseFloat(tWR)>25?'var(--red)':parseFloat(tWR)>15?'var(--amber)':'var(--green)'],
+    ['Low Stock',lowN,lowN>0?'var(--amber)':'var(--green)'],
+    ['Stockouts',outN,outN>0?'var(--red)':'var(--green)'],
+  ].map(function(item){return '<div style="background:var(--white);border-radius:var(--r);padding:12px 14px;box-shadow:var(--shadow);border-top:3px solid '+item[2]+';"><div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;">'+item[0]+'</div><div style="font-size:20px;font-weight:900;color:'+item[2]+'">'+item[1]+'</div></div>';}).join('');
+}
+
+function logSessionStock(){
+  loadSessionLog();
+  const t=today();
+  const todayC=children.filter(function(c){return c.session_date===t;});
+  if(!todayC.length){toast('No children vaccinated today to log');return;}
+  const snap={
+    loggedAt:new Date().toISOString(),sessionDate:t,
+    period:document.getElementById('stk-month')?.value||currentPeriod(),
+    childrenToday:todayC.length,
+    zeroDoseToday:todayC.filter(function(c){return c.zero_dose==='Yes';}).length,
+    dosesUsed:{},closingBalance:{},
+  };
+  SGRP.forEach(function(g){
+    snap.dosesUsed[g.id]=usedDToday(g.id);
+    snap.closingBalance[g.id]=+(document.getElementById('sk_'+g.id+'_c')?.textContent||0);
+  });
+  const idx=sessionLog.findIndex(function(s){return s.sessionDate===t;});
+  if(idx>=0) sessionLog[idx]=snap; else sessionLog.unshift(snap);
+  sessionLog=sessionLog.slice(0,60);
+  saveSessionLog();
+  toast('Session logged — '+todayC.length+' children, '+t);
+  renderSessionLog();
+}
+
+function renderSessionLog(){
+  loadSessionLog();
+  const el=document.getElementById('stk-session-log');
+  if(!el) return;
+  if(!sessionLog.length){el.innerHTML='<p class="sm muted">No session logs yet. Tap <b>Log This Session</b> after each vaccination session.</p>';return;}
+  el.innerHTML='<div class="tw"><table class="rt" style="min-width:700px;"><thead><tr>'
+    +'<th>Session Date</th><th>Children</th><th>Zero-Dose</th>'
+    +'<th>Vaccines Used Today</th><th>Low Balance Flags</th><th>Logged At</th>'
+    +'</tr></thead><tbody>'
+    +sessionLog.map(function(s){
+      const topVax=Object.entries(s.dosesUsed||{}).filter(function(e){return e[1]>0;}).sort(function(a,b){return b[1]-a[1];}).slice(0,5)
+        .map(function(e){const g=SGRP.find(function(x){return x.id===e[0];});return '<span style="background:var(--mintl);border:1px solid var(--line);border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;margin:1px;">'+(g?g.name:e[0])+': '+e[1]+'</span>';}).join('');
+      const lowBal=Object.entries(s.closingBalance||{}).filter(function(e){return e[1]<10&&e[1]>=0;}).slice(0,4)
+        .map(function(e){const g=SGRP.find(function(x){return x.id===e[0];});return '<span style="background:'+(e[1]<5?'var(--redl)':'var(--amberl)')+';border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;margin:1px;">'+(g?g.name:e[0])+': '+e[1]+'</span>';}).join('');
+      return '<tr>'
+        +'<td class="bold" style="color:var(--teal)">'+fmtD(s.sessionDate)+'</td>'
+        +'<td style="font-weight:700">'+s.childrenToday+'</td>'
+        +'<td>'+s.zeroDoseToday+'</td>'
+        +'<td><div style="display:flex;flex-wrap:wrap;gap:2px;">'+(topVax||'—')+'</div></td>'
+        +'<td><div style="display:flex;flex-wrap:wrap;gap:2px;">'+(lowBal||'<span class="badge bg-g">All OK</span>')+'</div></td>'
+        +'<td class="sm muted">'+(s.loggedAt?new Date(s.loggedAt).toLocaleString('en-NG'):'')+'</td>'
+        +'</tr>';
+    }).join('')
+    +'</tbody></table></div>';
+}
+
+function saveStock(){
+  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  loadThresholds();loadExpiryDates();
+  SGRP.forEach(function(g){
+    stock[g.id]={
+      open: +(document.getElementById('sk_'+g.id+'_o')?.value||0),
+      recv: +(document.getElementById('sk_'+g.id+'_r')?.value||0),
+      waste:+(document.getElementById('sk_'+g.id+'_w')?.value||0),
+      period,savedAt:new Date().toISOString(),
+    };
+    thresholds[g.id]=+(document.getElementById('sk_'+g.id+'_th')?.value||10);
+    const expVal=document.getElementById('sk_'+g.id+'_exp')?.value||'';
+    if(expVal) expiryDates[g.id]=expVal;
+  });
+  const snapshot={
+    period,savedAt:new Date().toISOString(),
+    data:JSON.parse(JSON.stringify(stock)),
+    totalUsed:SGRP.reduce(function(s,g){return s+usedD(g.id,period);},0),
+    totalChildren:children.filter(function(c){return (c.session_date||'').startsWith(period);}).length,
+  };
+  const idx=stockHistory.findIndex(function(h){return h.period===period;});
+  if(idx>=0) stockHistory[idx]=snapshot; else stockHistory.unshift(snapshot);
+  stockHistory=stockHistory.slice(0,12);
+  saveLocal();saveStockHistory();saveThresholds();saveExpiryDates();
+  document.getElementById('stk-saved-msg').textContent='Stock saved for '+periodLabel(period)+' — '+new Date().toLocaleTimeString();
+  toast('Stock updated and saved');
+  buildStockTable();
+  // Push stock snapshot to Supabase
+  pushStockSB(period);
+}
+
+async function pushStockSB(period){
+  try{
+    const now=new Date();
+    const payload={
+      id: facility.name.replace(/[^a-zA-Z0-9]/g,'_')+'_'+period,
+      facility_name: facility.name,
+      facility_lga: facility.lga,
+      facility_ward: facility.ward||'',
+      focal_person: facility.focalPerson,
+      period: period,
+      period_label: periodLabel(period),
+      saved_at: now.toISOString(),
+      children_this_period: children.filter(function(c){return (c.session_date||'').startsWith(period);}).length,
+      total_doses_used: SGRP.reduce(function(s,g){return s+usedD(g.id,period);},0),
+      stock_data: JSON.stringify(SGRP.map(function(g){
+        const s=stock[g.id]||{open:0,recv:0,waste:0};
+        const u=usedD(g.id,period);
+        const cl=(parseInt(s.open)||0)+(parseInt(s.recv)||0)-u-(parseInt(s.waste)||0);
+        const thresh=thresholds[g.id]||10;
+        const exp=expiryDates[g.id]||'';
+        const expExpired=exp&&new Date(exp)<now;
+        return{
+          id:g.id, name:g.name,
+          opening:parseInt(s.open)||0,
+          received:parseInt(s.recv)||0,
+          used:u,
+          wasted:parseInt(s.waste)||0,
+          closing:cl,
+          threshold:thresh,
+          expiry:exp,
+          status:cl<0?'stockout':cl<thresh?'low':expExpired?'expired':'adequate',
+        };
+      })),
+    };
+    const r=await fetch(SB_URL+'/rest/v1/facility_stock',{
+      method:'POST',
+      headers:{...SBH,'Prefer':'resolution=merge-duplicates'},
+      body:JSON.stringify(payload),
+    });
+    if(r.ok||r.status===201||r.status===200){
+      document.getElementById('stk-saved-msg').textContent+=' — synced to SIO dashboard ✓';
+    }
+  }catch(e){
+    document.getElementById('stk-saved-msg').textContent+=' — (stock sync offline, will retry later)';
+  }
+}
+
+function resetStock(){
+  if(!confirm('Start a new period? Closing balances carry forward as new opening balances.')) return;
+  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  SGRP.forEach(function(g){
+    const s=stock[g.id]||{open:0,recv:0,waste:0};
+    const cl=(parseInt(s.open)||0)+(parseInt(s.recv)||0)-usedD(g.id,period)-(parseInt(s.waste)||0);
+    stock[g.id]={open:Math.max(0,cl),recv:0,waste:0};
+  });
+  saveLocal();buildStockTable();
+  toast('Period reset — closing balances carried forward');
+}
+
+function renderStockHistory(){
+  const el=document.getElementById('stk-history');
+  if(!el) return;
+  loadStockHistory();
+  if(!stockHistory.length){el.innerHTML='<p class="sm muted">No previous stock records yet. Tap Save Stock Update at the end of each monthly period.</p>';return;}
+  el.innerHTML='<div class="tw"><table class="rt" style="min-width:600px;"><thead><tr>'
+    +'<th>Period</th><th>Children</th><th>Doses Used</th><th>Opening</th><th>Received</th><th>Wasted</th><th>Closing</th><th>Wastage %</th><th>Saved</th>'
+    +'</tr></thead><tbody>'
+    +stockHistory.map(function(h){
+      const tO=SGRP.reduce(function(s,g){const d=h.data[g.id]||{};return s+(parseInt(d.open)||0);},0);
+      const tR=SGRP.reduce(function(s,g){const d=h.data[g.id]||{};return s+(parseInt(d.recv)||0);},0);
+      const tW=SGRP.reduce(function(s,g){const d=h.data[g.id]||{};return s+(parseInt(d.waste)||0);},0);
+      const cl=tO+tR-(h.totalUsed||0)-tW;
+      const wr=(h.totalUsed+tW)>0?((tW/(h.totalUsed+tW))*100).toFixed(1):'0.0';
+      return '<tr>'
+        +'<td class="bold" style="color:var(--teal)">'+periodLabel(h.period)+'</td>'
+        +'<td>'+(h.totalChildren||0)+'</td>'
+        +'<td style="font-weight:700;color:var(--teal)">'+(h.totalUsed||0)+'</td>'
+        +'<td>'+tO+'</td><td>'+tR+'</td><td>'+tW+'</td>'
+        +'<td style="font-weight:700;color:'+(cl<0?'var(--red)':'var(--green)')+'">'+cl+'</td>'
+        +'<td><span class="badge '+(parseFloat(wr)>25?'bg-r':parseFloat(wr)>15?'bg-a':'bg-g')+'">'+wr+'%</span></td>'
+        +'<td class="sm muted">'+(h.savedAt?new Date(h.savedAt).toLocaleDateString('en-NG'):'')+'</td>'
+        +'</tr>';
+    }).join('')
+    +'</tbody></table></div>';
+}
+
+function printStock(){
+  const period=document.getElementById('stk-month')?.value||currentPeriod();
+  const win=window.open('','_blank');
+  const now=new Date();
+  const rows=SGRP.map(function(g){
+    const s=stock[g.id]||{open:0,recv:0,waste:0};
+    const u=usedD(g.id,period),ut=usedDToday(g.id);
+    const cl=(parseInt(s.open)||0)+(parseInt(s.recv)||0)-u-(parseInt(s.waste)||0);
+    const thresh=thresholds[g.id]||10;
+    const exp=expiryDates[g.id]||'—';
+    const tot=u+(parseInt(s.waste)||0),wr=tot>0?(((parseInt(s.waste)||0)/tot)*100).toFixed(1):'0.0';
+    const status=cl<0?'STOCKOUT':cl<thresh?'LOW STOCK':'Adequate';
+    const rowStyle=cl<0?'background:#FDEAEA':cl<thresh?'background:#FFF3DC':'';
+    return '<tr style="'+rowStyle+'"><td>'+g.name+'</td><td>'+thresh+'</td><td>'+exp+'</td>'
+      +'<td>'+s.open+'</td><td>'+s.recv+'</td><td>'+ut+'</td><td>'+u+'</td>'
+      +'<td>'+s.waste+'</td><td><b>'+cl+'</b></td><td>'+wr+'%</td><td><b>'+status+'</b></td></tr>';
+  }).join('');
+  win.document.write('<html><head><title>Stock Report — '+periodLabel(period)+'</title>'
+    +'<style>body{font-family:Arial,sans-serif;font-size:11px;padding:16px;}'
+    +'h2{color:#00574F;font-size:14px;margin:0;}p{margin:2px 0;font-size:11px;color:#555;}'
+    +'table{width:100%;border-collapse:collapse;margin-top:10px;}'
+    +'th{background:#00574F;color:#fff;padding:6px 8px;text-align:left;font-size:10px;}'
+    +'td{padding:5px 8px;border-bottom:1px solid #ddd;font-size:11px;}'
+    +'</style></head><body>'
+    +'<h2>Rivers State Primary Health Care Management Board</h2>'
+    +'<p>eImmunize — Vaccine Stock Report &nbsp;|&nbsp; '+periodLabel(period)+'</p>'
+    +'<p>Facility: '+(facility.name||'')+' &nbsp;|&nbsp; LGA: '+(facility.lga||'')+' &nbsp;|&nbsp; Focal Person: '+(facility.focalPerson||'')+'</p>'
+    +'<p>Printed: '+now.toLocaleString('en-NG')+' &nbsp;|&nbsp; Children this period: '+children.filter(function(c){return (c.session_date||'').startsWith(period);}).length+'</p>'
+    +'<table><thead><tr>'
+    +'<th>Vaccine</th><th>Min.Threshold</th><th>Expiry Date</th>'
+    +'<th>Opening</th><th>Received</th><th>Used Today</th><th>Used Period</th>'
+    +'<th>Wasted</th><th>Closing Balance</th><th>Wastage %</th><th>Status</th>'
+    +'</tr></thead><tbody>'+rows+'</tbody></table>'
+    +'</body></html>');
+  win.document.close();win.print();
+}
 
 window.addEventListener('online',()=>flushPending());
 window.addEventListener('offline',()=>setSS('pending','Offline'));

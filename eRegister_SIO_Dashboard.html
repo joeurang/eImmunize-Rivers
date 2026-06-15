@@ -108,6 +108,7 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
     <div class="nav" onclick="goPg('vaccines',this)"><span class="ni">💉</span>Vaccines Used</div>
     <div class="nav" onclick="goPg('facilities',this)"><span class="ni">🏥</span>Facilities</div>
     <div class="nav" onclick="goPg('alerts',this)"><span class="ni">⚠</span>Alerts <span id="abadge" style="display:none;margin-left:auto;background:var(--red);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;"></span></div>
+    <div class="nav" onclick="goPg('stock',this)"><span class="ni">💊</span>Stock Monitor</div>
     <div class="nav-divider"></div>
     <div class="ss">Settings</div>
     <div class="nav" onclick="goPg('settings',this)"><span class="ni">⚙</span>Settings</div>
@@ -193,6 +194,80 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
       <div id="alerts-wrap"></div>
     </div>
 
+    <div class="pg" id="pg-stock">
+      <div class="flex jcb aic mb12 fw gap8">
+        <div><h2 style="font-size:20px;font-weight:800;">Stock Monitor</h2>
+          <div class="lastupd" id="stk-upd">Auto-refreshes with main data</div>
+        </div>
+        <div class="flex gap8 fw">
+          <select id="stk-lf" style="border:1.5px solid var(--line);border-radius:var(--r2);padding:7px 11px;font-size:13px;background:#fff;" onchange="renderStock()">
+            <option value="">All LGAs</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- STOCK ALERT BANNER -->
+      <div id="stk-alert-banner" style="margin-bottom:14px;"></div>
+
+      <!-- SUMMARY CARDS -->
+      <div class="sgrid" id="stk-summary-cards" style="margin-bottom:16px;"></div>
+
+      <!-- FACILITY STOCK TABLE -->
+      <div class="card">
+        <div class="ch"><span class="ch-l">Vaccine Stock — All Facilities</span></div>
+        <p class="sm muted mb12">Stock data syncs automatically when facilities tap <b>Save Stock Update</b>. Rows highlighted in red or amber require attention.</p>
+        <div class="tbl-wrap">
+        <table class="tbl" id="stk-main-tbl">
+          <thead>
+            <tr>
+              <th rowspan="2">Facility</th>
+              <th rowspan="2">LGA</th>
+              <th rowspan="2">Period</th>
+              <th rowspan="2">Children</th>
+              <th rowspan="2">Total Doses Used</th>
+              <th colspan="3" style="text-align:center;border-left:1px solid rgba(255,255,255,0.2);">Stock Position</th>
+              <th rowspan="2" style="border-left:1px solid rgba(255,255,255,0.2);">Wastage</th>
+              <th rowspan="2">Last Sync</th>
+            </tr>
+            <tr style="background:#004A42;">
+              <th style="border-left:1px solid rgba(255,255,255,0.2);font-size:10px;">Closing Balance</th>
+              <th style="font-size:10px;">Low Stock Items</th>
+              <th style="font-size:10px;">Overall Status</th>
+            </tr>
+          </thead>
+          <tbody id="stk-fac-tbody"></tbody>
+        </table>
+        </div>
+        <div class="empty" id="stk-empty" style="display:none;">
+          <div class="ei">💊</div>
+          <p>No stock data yet.<br>Facilities must tap <b>Save Stock Update</b> in the Stock tab of their register.</p>
+        </div>
+      </div>
+
+      <!-- PER-VACCINE BREAKDOWN -->
+      <div class="card">
+        <div class="ch"><span class="ch-l">Per-Vaccine Stock Status — All Facilities</span></div>
+        <div class="tg" id="stk-vax-cards" style="margin-bottom:14px;"></div>
+        <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr>
+            <th>Vaccine</th><th>Facilities Reporting</th>
+            <th>Total Opening</th><th>Total Received</th>
+            <th>Total Used</th><th>Total Closing</th>
+            <th>Stockouts</th><th>Low Stock</th><th>Expired</th>
+          </tr></thead>
+          <tbody id="stk-vax-tbody"></tbody>
+        </table>
+        </div>
+      </div>
+
+      <!-- EXPIRY TRACKER -->
+      <div class="card">
+        <div class="ch"><span class="ch-l">Expiry Date Tracker</span></div>
+        <div id="stk-expiry-wrap"></div>
+      </div>
+    </div>
+
     <div class="pg" id="pg-settings">
       <h2 style="font-size:20px;font-weight:800;margin-bottom:16px;">Settings</h2>
       <div class="card">
@@ -264,17 +339,25 @@ function fltDate(rows,f){
 }
 function parseVax(v){if(Array.isArray(v))return v;if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return[];}}return[];}
 
+let allStock=[];
+
 async function loadAll(){
   try{
-    const r=await fetch(`${SB_URL}/rest/v1/immunization_register?select=*&order=created_at.desc&limit=5000`,{headers:SBH});
-    if(!r.ok)throw new Error(r.status);
-    allRows=await r.json();
-    document.getElementById('last-upd').textContent=`Last refresh: ${new Date().toLocaleTimeString('en-NG')} — ${allRows.length} records`;
+    const [r1,r2]=await Promise.all([
+      fetch(SB_URL+'/rest/v1/immunization_register?select=*&order=created_at.desc&limit=5000',{headers:SBH}),
+      fetch(SB_URL+'/rest/v1/facility_stock?select=*&order=saved_at.desc',{headers:SBH}),
+    ]);
+    if(!r1.ok) throw new Error(r1.status);
+    allRows = await r1.json();
+    if(r2.ok) allStock = await r2.json();
+    document.getElementById('last-upd').textContent='Last refresh: '+new Date().toLocaleTimeString('en-NG')+' — '+allRows.length+' child records, '+allStock.length+' stock reports';
     populateLGAFilter();
     renderOV();
     renderAlerts();
+    // Refresh stock page if visible
+    if(document.getElementById('pg-stock').classList.contains('on')) renderStock();
   }catch(e){
-    document.getElementById('last-upd').textContent=`⚠ Could not connect to database. Check internet.`;
+    document.getElementById('last-upd').textContent='⚠ Could not connect to database. Check internet.';
   }
 }
 
@@ -295,6 +378,7 @@ function goPg(name,el){
   if(name==='vaccines')renderVax();
   if(name==='facilities')renderFacilities();
   if(name==='alerts')renderAlerts();
+  if(name==='stock')renderStock();
 }
 
 function getFiltered(){
@@ -532,6 +616,181 @@ function clearCache(){
 function startPoll(secs){
   if(pollTimer)clearInterval(pollTimer);
   pollTimer=setInterval(loadAll,secs*1000);
+}
+
+function renderStock(){
+  const lgaF=document.getElementById('stk-lf')?.value||'';
+
+  // Populate LGA filter
+  const lgas=[...new Set(allStock.map(function(s){return s.facility_lga;}).filter(Boolean))].sort();
+  const lgaSel=document.getElementById('stk-lf');
+  if(lgaSel&&lgaSel.options.length===1) lgas.forEach(function(l){const o=document.createElement('option');o.value=l;o.textContent=l;lgaSel.appendChild(o);});
+
+  let rows=lgaF?allStock.filter(function(s){return s.facility_lga===lgaF;}):allStock;
+
+  // Keep only latest per facility
+  const facLatest={};
+  rows.forEach(function(s){
+    const fn=s.facility_name;
+    if(!facLatest[fn]||s.saved_at>facLatest[fn].saved_at) facLatest[fn]=s;
+  });
+  const facRows=Object.values(facLatest);
+
+  // Summary cards
+  let totalStockout=0,totalLow=0,totalExpired=0,totalFacs=facRows.length;
+  facRows.forEach(function(s){
+    const data=JSON.parse(s.stock_data||'[]');
+    data.forEach(function(v){
+      if(v.status==='stockout') totalStockout++;
+      else if(v.status==='low') totalLow++;
+      if(v.status==='expired') totalExpired++;
+    });
+  });
+
+  const sc=document.getElementById('stk-summary-cards');
+  if(sc) sc.innerHTML=[
+    ['Facilities Reporting',totalFacs,'var(--teal)'],
+    ['Stockout Items',totalStockout,totalStockout>0?'var(--red)':'var(--green)'],
+    ['Low Stock Items',totalLow,totalLow>0?'var(--amber)':'var(--green)'],
+    ['Expired Vaccines',totalExpired,totalExpired>0?'var(--red)':'var(--green)'],
+  ].map(function(item){
+    return '<div class="sc" style="border-top-color:'+item[2]+'"><div class="sl">'+item[0]+'</div><div class="sv">'+item[1]+'</div></div>';
+  }).join('');
+
+  // Alert banner
+  const banner=document.getElementById('stk-alert-banner');
+  if(banner){
+    const critAlerts=[];
+    facRows.forEach(function(s){
+      const data=JSON.parse(s.stock_data||'[]');
+      data.filter(function(v){return v.status==='stockout'||v.status==='expired';}).forEach(function(v){
+        critAlerts.push('<b>'+s.facility_name+'</b> — '+v.name+': '+(v.status==='stockout'?'STOCKOUT ('+v.closing+' doses)':'EXPIRED ('+fmtD(v.expiry)+')'));
+      });
+    });
+    if(critAlerts.length){
+      banner.innerHTML='<div style="background:var(--redl);border-left:4px solid var(--red);border-radius:var(--r2);padding:12px 16px;font-size:13px;">'
+        +'<strong style="color:var(--red);">🚨 '+critAlerts.length+' Critical Alert'+(critAlerts.length>1?'s':'')+'</strong><br>'
+        +critAlerts.map(function(a){return '• '+a;}).join('<br>')+'</div>';
+    } else if(totalLow>0){
+      banner.innerHTML='<div style="background:var(--amberl);border-left:4px solid var(--amber);border-radius:var(--r2);padding:12px 16px;font-size:13px;">'
+        +'<strong style="color:var(--amber);">⚡ '+totalLow+' vaccines running low across facilities</strong></div>';
+    } else {
+      banner.innerHTML='<div style="background:var(--greenl);border-left:4px solid var(--green);border-radius:var(--r2);padding:10px 14px;font-size:13px;color:var(--green);">✓ All facilities — no critical stock issues</div>';
+    }
+  }
+
+  // Facility stock table
+  const tbody=document.getElementById('stk-fac-tbody');
+  const empty=document.getElementById('stk-empty');
+  if(!facRows.length){if(tbody)tbody.innerHTML='';if(empty)empty.style.display='block';return;}
+  if(empty)empty.style.display='none';
+
+  if(tbody) tbody.innerHTML=facRows.sort(function(a,b){return a.facility_name.localeCompare(b.facility_name);}).map(function(s){
+    const data=JSON.parse(s.stock_data||'[]');
+    const totalClose=data.reduce(function(sum,v){return sum+v.closing;},0);
+    const lowItems=data.filter(function(v){return v.status==='low'||v.status==='stockout';});
+    const expired=data.filter(function(v){return v.status==='expired';});
+    let overallStatus,oClass;
+    if(data.some(function(v){return v.status==='stockout';})){overallStatus='🚨 Stockout';oClass='bg-r';}
+    else if(expired.length){overallStatus='❌ Expired Vax';oClass='bg-r';}
+    else if(lowItems.length){overallStatus='⚡ Low Stock';oClass='bg-a';}
+    else{overallStatus='✓ Adequate';oClass='bg-g';}
+    const rowStyle=oClass==='bg-r'?'background:#FFF5F5;':oClass==='bg-a'?'background:#FFFBF0;':'';
+    const wr=s.total_doses_used>0?((data.reduce(function(sum,v){return sum+v.wasted;},0)/s.total_doses_used)*100).toFixed(1):'0.0';
+    return '<tr style="'+rowStyle+'">'
+      +'<td class="bold" style="color:var(--teal)">'+s.facility_name+'</td>'
+      +'<td>'+s.facility_lga+'</td>'
+      +'<td>'+s.period_label+'</td>'
+      +'<td style="font-weight:700">'+s.children_this_period+'</td>'
+      +'<td style="font-weight:700;color:var(--teal)">'+s.total_doses_used+'</td>'
+      +'<td style="font-weight:800;border-left:1px solid var(--line);color:'+(totalClose<0?'var(--red)':totalClose<20?'var(--amber)':'var(--green)')+'">'+totalClose+'</td>'
+      +'<td>'+(lowItems.length?'<span class="badge bg-r">'+lowItems.map(function(v){return v.name;}).join(', ')+'</span>':'<span class="badge bg-g">None</span>')+'</td>'
+      +'<td><span class="badge '+oClass+'">'+overallStatus+'</span></td>'
+      +'<td><span class="badge '+(parseFloat(wr)>25?'bg-r':parseFloat(wr)>15?'bg-a':'bg-g')+'">'+wr+'%</span></td>'
+      +'<td class="sm muted">'+fmtD(s.saved_at?s.saved_at.split('T')[0]:'')+'</td>'
+      +'</tr>';
+  }).join('');
+
+  // Per-vaccine aggregate
+  const vaxAgg={};
+  const VNAMES={BCG:'BCG',OPV:'OPV',IPV:'IPV',HepB0:'Hep B0',Penta:'Pentavalent',PCV:'PCV10',Rota:'Rotavirus',MR:'MR',YF:'Yellow Fever',MenA:'MenA',HPV:'HPV',Td:'Td',VitA:'Vitamin A'};
+  facRows.forEach(function(s){
+    const data=JSON.parse(s.stock_data||'[]');
+    data.forEach(function(v){
+      if(!vaxAgg[v.id]) vaxAgg[v.id]={name:v.name,facs:0,opening:0,received:0,used:0,closing:0,stockouts:0,low:0,expired:0};
+      vaxAgg[v.id].facs++;
+      vaxAgg[v.id].opening+=v.opening||0;
+      vaxAgg[v.id].received+=v.received||0;
+      vaxAgg[v.id].used+=v.used||0;
+      vaxAgg[v.id].closing+=v.closing||0;
+      if(v.status==='stockout') vaxAgg[v.id].stockouts++;
+      if(v.status==='low') vaxAgg[v.id].low++;
+      if(v.status==='expired') vaxAgg[v.id].expired++;
+    });
+  });
+
+  const vaxCards=document.getElementById('stk-vax-cards');
+  if(vaxCards) vaxCards.innerHTML=Object.values(vaxAgg).map(function(v){
+    const hasAlert=v.stockouts>0||v.expired>0;
+    const hasWarn=v.low>0;
+    return '<div class="tc" style="border-color:'+(hasAlert?'var(--red)':hasWarn?'var(--amber)':'var(--line)')+';">'
+      +'<div class="tcn">'+v.name+'</div>'
+      +'<div class="tcv" style="color:'+(v.closing<0?'var(--red)':v.closing<10?'var(--amber)':'var(--teal)')+'">'+v.closing+'</div>'
+      +'<div class="tcs">closing balance</div>'
+      +(hasAlert?'<div style="margin-top:4px;"><span class="badge bg-r">Alert</span></div>':hasWarn?'<div style="margin-top:4px;"><span class="badge bg-a">Low</span></div>':'')
+      +'</div>';
+  }).join('');
+
+  const vaxTbody=document.getElementById('stk-vax-tbody');
+  if(vaxTbody) vaxTbody.innerHTML=Object.values(vaxAgg).map(function(v){
+    return '<tr>'
+      +'<td class="bold">'+v.name+'</td>'
+      +'<td>'+v.facs+'</td>'
+      +'<td>'+v.opening+'</td>'
+      +'<td>'+v.received+'</td>'
+      +'<td style="font-weight:700;color:var(--teal)">'+v.used+'</td>'
+      +'<td style="font-weight:900;color:'+(v.closing<0?'var(--red)':v.closing<10?'var(--amber)':'var(--green)')+'">'+v.closing+'</td>'
+      +'<td>'+(v.stockouts?'<span class="badge bg-r">'+v.stockouts+'</span>':'<span class="badge bg-g">0</span>')+'</td>'
+      +'<td>'+(v.low?'<span class="badge bg-a">'+v.low+'</span>':'<span class="badge bg-g">0</span>')+'</td>'
+      +'<td>'+(v.expired?'<span class="badge bg-r">'+v.expired+'</span>':'<span class="badge bg-g">0</span>')+'</td>'
+      +'</tr>';
+  }).join('');
+
+  // Expiry tracker
+  const expWrap=document.getElementById('stk-expiry-wrap');
+  if(expWrap){
+    const expItems=[];
+    const now=new Date();
+    const soon=new Date(now.getTime()+30*86400000);
+    facRows.forEach(function(s){
+      const data=JSON.parse(s.stock_data||'[]');
+      data.filter(function(v){return v.expiry;}).forEach(function(v){
+        const expDate=new Date(v.expiry);
+        expItems.push({facility:s.facility_name,lga:s.facility_lga,vaccine:v.name,expiry:v.expiry,
+          expired:expDate<now,soon:expDate<=soon&&expDate>=now});
+      });
+    });
+    const expiring=expItems.filter(function(e){return e.expired||e.soon;});
+    if(!expiring.length){
+      expWrap.innerHTML='<p class="sm muted">No vaccines expiring within 30 days across all facilities.</p>';
+    } else {
+      expWrap.innerHTML='<div class="tbl-wrap"><table class="tbl"><thead><tr>'
+        +'<th>Facility</th><th>LGA</th><th>Vaccine</th><th>Expiry Date</th><th>Status</th>'
+        +'</tr></thead><tbody>'
+        +expiring.map(function(e){
+          return '<tr style="background:'+(e.expired?'var(--redl)':'var(--amberl)')+'">'
+            +'<td class="bold">'+e.facility+'</td>'
+            +'<td>'+e.lga+'</td>'
+            +'<td class="bold">'+e.vaccine+'</td>'
+            +'<td>'+fmtD(e.expiry)+'</td>'
+            +'<td><span class="badge '+(e.expired?'bg-r':'bg-a')+'">'+(e.expired?'EXPIRED':'Expiring Soon')+'</span></td>'
+            +'</tr>';
+        }).join('')
+        +'</tbody></table></div>';
+    }
+  }
+
+  document.getElementById('stk-upd').textContent='Last updated: '+new Date().toLocaleTimeString('en-NG');
 }
 
 window.onload=()=>{

@@ -199,8 +199,14 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
         </div>
         <div class="row">
           <div class="fg"><label>Health Card?</label><select id="n_card"><option value="Yes">Yes — issued</option><option value="No">No</option><option value="Existing">Existing card</option></select></div>
-          <div class="fg"><label>Visit Type</label><select id="n_vt"><option>Fixed session</option><option>Outreach</option><option>Defaulter return</option></select></div>
-          <div class="fg"><label>Zero-Dose Child?</label><select id="n_zd"><option value="No">No — prior vaccines</option><option value="Yes">Yes — first contact</option></select></div>
+          <div class="fg"><label>Visit Type</label><select id="n_vt"><option value="Fixed">Fixed session</option><option value="Outreach">Outreach session</option></select></div>
+          <div class="fg" style="grid-column:1/-1;"><label>Zero-Dose Status <span style="font-size:10px;font-weight:400;color:var(--muted);">(auto-detected from age & vaccines selected)</span></label>
+    <select id="n_zd" onchange="checkZeroDose()">
+      <option value="No">No — has received 6-week vaccines (OPV-1, Penta-1, IPV-1, Rota-1, PCV-1)</option>
+      <option value="Yes">Yes — Zero-Dose (never received 6-week series vaccines)</option>
+    </select>
+    <div id="zd-note" style="display:none;margin-top:6px;background:var(--amberl);border-left:3px solid var(--amber);border-radius:4px;padding:8px 12px;font-size:12px;color:var(--amber);font-weight:600;"></div>
+  </div>
         </div>
       </div>
       <div class="card">
@@ -427,13 +433,69 @@ function calcAge(){
   else if(tot<9){nxt.setFullYear(b.getFullYear());nxt.setMonth(9);}
   else if(tot<15){nxt.setFullYear(b.getFullYear());nxt.setMonth(15);}
   if(nxt>n)document.getElementById('n_nxt').value=nxt.toISOString().split('T')[0];
+  // Auto-check zero dose based on age
+  autoDetectZeroDose();
+}
+
+function autoDetectZeroDose(){
+  // Zero-dose = child has never received first series vaccines (Penta-1, OPV-1, BCG)
+  // Auto-flag as zero-dose if child is >= 6 weeks old (eligible for first series)
+  // and none of the first series vaccines are selected yet
+  const dob=document.getElementById('n_dob').value;
+  if(!dob) return;
+  const ageWeeks=Math.floor((new Date()-new Date(dob))/(7*24*3600*1000));
+  const firstSeries=['OPV1','Penta1','IPV1','Rota1','PCV1'];
+  const anyFirstSelected=firstSeries.some(function(id){
+    return document.getElementById('vc_'+id)&&document.getElementById('vc_'+id).classList.contains('on');
+  });
+  const zdSel=document.getElementById('n_zd');
+  if(!zdSel) return;
+  if(ageWeeks>=6 && !anyFirstSelected){
+    // Child is old enough for first vaccines but hasn't received them — likely zero-dose
+    zdSel.value='Yes';
+    zdSel.style.background='var(--amberl)';
+    zdSel.style.borderColor='var(--amber)';
+    showZeroDoseNote('⭐ Auto-flagged as Zero-Dose — child is '+ageWeeks+' weeks old and has not received the 6-week series (OPV-1, Penta-1, IPV-1, Rota-1, PCV-1). Confirm below.');
+  } else if(anyFirstSelected){
+    zdSel.value='No';
+    zdSel.style.background='var(--bg)';
+    zdSel.style.borderColor='var(--line)';
+    showZeroDoseNote('');
+  }
+}
+
+function checkZeroDose(){
+  const zdSel=document.getElementById('n_zd');
+  if(!zdSel) return;
+  if(zdSel.value==='Yes'){
+    zdSel.style.background='var(--amberl)';
+    zdSel.style.borderColor='var(--amber)';
+    showZeroDoseNote('⭐ Zero-Dose child — ensure OPV-1, Penta-1, IPV-1, Rota-1 and PCV-1 are given this visit if no contraindication.');
+  } else {
+    zdSel.style.background='var(--bg)';
+    zdSel.style.borderColor='var(--line)';
+    showZeroDoseNote('');
+  }
+}
+
+function showZeroDoseNote(msg){
+  var el=document.getElementById('zd-note');
+  if(!el) return;
+  el.textContent=msg;
+  el.style.display=msg?'block':'none';
 }
 
 function buildVchips(){
   document.getElementById('vchips').innerHTML=VAX.map(v=>
-    `<div class="vc" id="vc_${v.id}" onclick="this.classList.toggle('on')">
+    `<div class="vc" id="vc_${v.id}" onclick="toggleVax(this,'${v.id}')">
       <div class="vc-name">${v.name}</div><div class="vc-sub">${v.sub}</div>
     </div>`).join('');
+}
+
+function toggleVax(el,id){
+  el.classList.toggle('on');
+  // Re-evaluate zero dose when first-series vaccines are toggled
+  if(['OPV1','Penta1','IPV1','Rota1','PCV1'].includes(id)) autoDetectZeroDose();
 }
 function getSelVax(){return VAX.filter(v=>document.getElementById('vc_'+v.id)?.classList.contains('on')).map(v=>({id:v.id,name:v.name}));}
 function clearVchips(){VAX.forEach(v=>document.getElementById('vc_'+v.id)?.classList.remove('on'));}

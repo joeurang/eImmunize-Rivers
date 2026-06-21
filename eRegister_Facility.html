@@ -52,6 +52,18 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 .vc-name{font-size:12px;font-weight:700;color:var(--ink);}
 .vc-sub{font-size:10px;color:var(--muted);}
 .vc.on .vc-name{color:var(--green);}
+.vc.due{border-color:var(--green);background:var(--greenl);}
+.vc.due .vc-name{color:var(--green);}
+.vc.due .vc-status{color:var(--green);}
+.vc.defaulted{border-color:var(--red);background:var(--redl);}
+.vc.defaulted .vc-name{color:var(--red);}
+.vc.defaulted .vc-status{color:var(--red);}
+.vc.notdue{opacity:0.5;}
+.vc.notdue .vc-status{color:var(--muted);}
+.vc.on.due{box-shadow:0 0 0 2px var(--green);}
+.vc.on.defaulted{box-shadow:0 0 0 2px var(--red);background:#FAD5D2;}
+.vc-status{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-top:2px;}
+.vc-week{font-size:9px;color:var(--muted);}
 .btn{padding:9px 18px;border-radius:var(--r2);font-size:13px;font-weight:700;cursor:pointer;border:none;display:inline-flex;align-items:center;gap:6px;transition:all .15s;}
 .btn-p{background:var(--teal);color:#fff;}.btn-p:hover{background:var(--teal2);}
 .btn-s{background:var(--green);color:#fff;}.btn-s:hover{background:#145234;}
@@ -190,7 +202,7 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
         <div class="row">
           <div class="fg"><label>Date of Birth <span class="req">*</span></label><input id="n_dob" type="date" onchange="calcAge()"/></div>
           <div class="fg"><label>Age (auto)</label><input id="n_age" readonly/></div>
-          <div class="fg"><label>Sex <span class="req">*</span></label><select id="n_sex"><option value="">—</option><option>Male</option><option>Female</option></select></div>
+          <div class="fg"><label>Sex <span class="req">*</span></label><select id="n_sex" onchange="applySchedule()"><option value="">—</option><option>Male</option><option>Female</option></select></div>
         </div>
         <div class="row">
           <div class="fg"><label>Mother / Caregiver <span class="req">*</span></label><input id="n_mum" placeholder="Full name"/></div>
@@ -209,9 +221,41 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
   </div>
         </div>
       </div>
-      <div class="card">
-        <div class="ch">Vaccines Given This Visit <span style="font-weight:400;text-transform:none;font-size:11px;color:var(--muted);">— tap each one given</span></div>
+      <div class="card" id="schedule-card">
+        <div class="ch">Vaccines — Smart Schedule
+          <span style="font-weight:400;text-transform:none;font-size:11px;color:var(--muted);">Enter DOB first for auto-scheduling</span>
+        </div>
+
+        <!-- Schedule summary bar -->
+        <div id="schedule-summary" style="display:none;margin-bottom:14px;">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+            <div style="background:var(--greenl);border:1.5px solid var(--green);border-radius:6px;padding:7px 14px;font-size:12px;font-weight:700;color:var(--green);">
+              ✓ Due Now: <span id="due-count">0</span>
+            </div>
+            <div style="background:var(--redl);border:1.5px solid var(--red);border-radius:6px;padding:7px 14px;font-size:12px;font-weight:700;color:var(--red);">
+              ⚠ Defaulted: <span id="def-count">0</span>
+            </div>
+            <div style="background:var(--amberl);border:1.5px solid var(--amber);border-radius:6px;padding:7px 14px;font-size:12px;font-weight:700;color:var(--amber);">
+              ⏳ Not Yet Due: <span id="nd-count">0</span>
+            </div>
+          </div>
+          <div id="catchup-note" style="display:none;background:var(--redl);border-left:4px solid var(--red);border-radius:6px;padding:10px 14px;font-size:12px;color:var(--red);margin-bottom:10px;"></div>
+          <div id="schedule-age-note" style="font-size:12px;color:var(--muted);margin-bottom:8px;"></div>
+        </div>
+
+        <!-- No DOB message -->
+        <div id="no-dob-note" style="background:var(--mintl);border-left:3px solid var(--mint);border-radius:6px;padding:10px 14px;font-size:12px;color:var(--teal);margin-bottom:12px;">
+          📅 Enter the child's <b>Date of Birth</b> above to auto-generate the vaccine schedule and flag missed doses.
+        </div>
+
+        <!-- Vaccine chips with schedule status -->
         <div class="vchips" id="vchips"></div>
+
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-o btn-sm" onclick="selectDueOnly()">✓ Select Due Only</button>
+          <button class="btn btn-o btn-sm" onclick="selectDueAndCatchup()">+ Include Catch-up</button>
+          <button class="btn btn-o btn-sm" onclick="clearVchips()">✗ Clear All</button>
+        </div>
       </div>
       <div class="card">
         <div class="ch">Session Details</div>
@@ -338,6 +382,286 @@ const VAX=[
   {id:'Td',name:'Td',sub:'Tetanus · Women'},
   {id:'VitA',name:'Vit A',sub:'Vitamin A'},
 ];
+// ═══ NIGERIAN EPI SCHEDULE ═══
+// Each vaccine: id, name, due at (weeks), window (weeks before/after), catch-up allowed up to (weeks)
+const EPI_SCHEDULE = [
+  // Birth
+  {id:'BCG',    name:'BCG',      dueWeeks:0,  windowMinus:0, windowPlus:2,  catchUpTo:52,  sub:'Birth'},
+  {id:'OPV0',   name:'OPV-0',   dueWeeks:0,  windowMinus:0, windowPlus:2,  catchUpTo:2,   sub:'Birth'},
+  {id:'HepB0',  name:'Hep B0',  dueWeeks:0,  windowMinus:0, windowPlus:2,  catchUpTo:2,   sub:'Birth'},
+  // 6 weeks
+  {id:'OPV1',   name:'OPV-1',   dueWeeks:6,  windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'6 weeks'},
+  {id:'Penta1', name:'Penta-1', dueWeeks:6,  windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'6 weeks'},
+  {id:'IPV1',   name:'IPV-1',   dueWeeks:6,  windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'6 weeks'},
+  {id:'Rota1',  name:'Rota-1',  dueWeeks:6,  windowMinus:1, windowPlus:4,  catchUpTo:24,  sub:'6 weeks'},
+  {id:'PCV1',   name:'PCV-1',   dueWeeks:6,  windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'6 weeks'},
+  // 10 weeks
+  {id:'OPV2',   name:'OPV-2',   dueWeeks:10, windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'10 weeks'},
+  {id:'Penta2', name:'Penta-2', dueWeeks:10, windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'10 weeks'},
+  {id:'Rota2',  name:'Rota-2',  dueWeeks:10, windowMinus:1, windowPlus:4,  catchUpTo:24,  sub:'10 weeks'},
+  {id:'PCV2',   name:'PCV-2',   dueWeeks:10, windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'10 weeks'},
+  // 14 weeks
+  {id:'OPV3',   name:'OPV-3',   dueWeeks:14, windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'14 weeks'},
+  {id:'Penta3', name:'Penta-3', dueWeeks:14, windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'14 weeks'},
+  {id:'IPV2',   name:'IPV-2',   dueWeeks:14, windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'14 weeks'},
+  {id:'Rota3',  name:'Rota-3',  dueWeeks:14, windowMinus:1, windowPlus:4,  catchUpTo:24,  sub:'14 weeks'},
+  {id:'PCV3',   name:'PCV-3',   dueWeeks:14, windowMinus:1, windowPlus:4,  catchUpTo:52,  sub:'14 weeks'},
+  // 9 months
+  {id:'MR1',    name:'MR-1',    dueWeeks:39, windowMinus:2, windowPlus:8,  catchUpTo:260, sub:'9 months'},
+  {id:'YF',     name:'Yel.Fever',dueWeeks:39,windowMinus:2, windowPlus:8,  catchUpTo:260, sub:'9 months'},
+  {id:'MenA',   name:'MenA',    dueWeeks:39, windowMinus:2, windowPlus:8,  catchUpTo:260, sub:'9 months'},
+  // 15 months
+  {id:'MR2',    name:'MR-2',    dueWeeks:65, windowMinus:2, windowPlus:8,  catchUpTo:260, sub:'15 months'},
+  // HPV — girls only, 9 years
+  {id:'HPV',    name:'HPV',     dueWeeks:468,windowMinus:26,windowPlus:52, catchUpTo:728, sub:'9 years (Girls)'},
+  // Td — women
+  {id:'Td',     name:'Td',      dueWeeks:null,windowMinus:0,windowPlus:999,catchUpTo:9999,sub:'Women of childbearing age'},
+  // Vitamin A
+  {id:'VitA',   name:'Vit A',   dueWeeks:26, windowMinus:4, windowPlus:999,catchUpTo:9999,sub:'6 months+'},
+];
+
+// Compute schedule status for each vaccine based on age in weeks
+function computeSchedule(ageWeeks, sex){
+  var result={};
+  EPI_SCHEDULE.forEach(function(v){
+    if(v.dueWeeks===null){
+      // Special vaccines (Td, VitA) — always show as available
+      result[v.id]={status:'available',label:'Available',v:v};
+      return;
+    }
+    var due=v.dueWeeks;
+    var early=due-v.windowMinus;
+    var late=due+v.windowPlus;
+    var catchUp=v.catchUpTo;
+
+    // HPV — only for girls
+    if(v.id==='HPV' && sex==='Male'){
+      result[v.id]={status:'na',label:'N/A (Boys)',v:v};
+      return;
+    }
+
+    if(ageWeeks<early){
+      // Not yet due
+      var weeksLeft=early-ageWeeks;
+      result[v.id]={status:'notdue',label:'Not due ('+weeksLeft+'wk'+( weeksLeft!==1?'s':'')+' left)',v:v};
+    } else if(ageWeeks>=early && ageWeeks<=late){
+      // Due now
+      result[v.id]={status:'due',label:'DUE NOW',v:v};
+    } else if(ageWeeks>late && ageWeeks<=catchUp){
+      // Defaulted — missed window but can still give
+      var weeksLate=ageWeeks-late;
+      result[v.id]={status:'defaulted',label:'MISSED ('+(weeksLate<4?(weeksLate+'wk late'):(Math.floor(weeksLate/4.3)+'m late'))+')',v:v};
+    } else if(ageWeeks>catchUp){
+      // Too late — beyond catch-up age
+      result[v.id]={status:'toolate',label:'Beyond catch-up',v:v};
+    }
+  });
+  return result;
+}
+
+function buildVchips(){
+  var grid=document.getElementById('vchips');
+  if(!grid) return;
+  grid.innerHTML='';
+  EPI_SCHEDULE.forEach(function(v){
+    var chip=document.createElement('div');
+    chip.className='vc';
+    chip.id='vc_'+v.id;
+    chip.dataset.vid=v.id;
+    chip.addEventListener('click',function(){toggleVax(this,this.dataset.vid);});
+    chip.innerHTML='<div class="vc-name">'+v.name+'</div>'
+      +'<div class="vc-sub">'+v.sub+'</div>'
+      +'<div class="vc-status" id="vcs_'+v.id+'"></div>';
+    grid.appendChild(chip);
+  });
+}
+
+function applySchedule(){
+  var dob=document.getElementById('n_dob').value;
+  var sex=document.getElementById('n_sex').value;
+  if(!dob){
+    document.getElementById('no-dob-note').style.display='block';
+    document.getElementById('schedule-summary').style.display='none';
+    // Reset all chips to neutral
+    EPI_SCHEDULE.forEach(function(v){
+      var chip=document.getElementById('vc_'+v.id);
+      if(chip){chip.className='vc';document.getElementById('vcs_'+v.id).textContent='';}
+    });
+    return;
+  }
+  document.getElementById('no-dob-note').style.display='none';
+  document.getElementById('schedule-summary').style.display='block';
+
+  var ageWeeks=Math.floor((new Date()-new Date(dob))/(7*24*3600*1000));
+  var schedule=computeSchedule(ageWeeks,sex);
+  var dueList=[],defaultedList=[],notDueList=[];
+
+  EPI_SCHEDULE.forEach(function(v){
+    var chip=document.getElementById('vc_'+v.id);
+    var statusEl=document.getElementById('vcs_'+v.id);
+    if(!chip) return;
+    var s=schedule[v.id];
+    if(!s) return;
+
+    // Reset classes
+    chip.className='vc';
+    if(s.status==='due'){chip.classList.add('due');dueList.push(v.id);}
+    else if(s.status==='defaulted'){chip.classList.add('defaulted');defaultedList.push(v.id);}
+    else if(s.status==='notdue'){chip.classList.add('notdue');notDueList.push(v.id);}
+    else if(s.status==='toolate'){chip.classList.add('notdue');chip.style.opacity='0.3';}
+    else if(s.status==='na'){chip.classList.add('notdue');chip.style.opacity='0.2';}
+    else{chip.classList.add('due');}
+
+    if(statusEl) statusEl.textContent=s.label||'';
+  });
+
+  // Update counts
+  document.getElementById('due-count').textContent=dueList.length;
+  document.getElementById('def-count').textContent=defaultedList.length;
+  document.getElementById('nd-count').textContent=notDueList.length;
+
+  // Age note
+  var ageLabel=ageWeeks<4?(ageWeeks+' week'+(ageWeeks!==1?'s':'')):
+    ageWeeks<52?(Math.floor(ageWeeks/4.3)+' months '+Math.floor(ageWeeks%4.3)+' weeks'):
+    (Math.floor(ageWeeks/52)+' year'+(Math.floor(ageWeeks/52)!==1?'s':'')+' '+Math.floor((ageWeeks%52)/4.3)+' months');
+  document.getElementById('schedule-age-note').textContent='Child age: '+ageLabel+' ('+ageWeeks+' weeks)';
+
+  // Catch-up note — show series-level summary
+  var catchupEl=document.getElementById('catchup-note');
+  var seriesGroups=[
+    {label:'Birth vaccines',ids:['BCG','OPV0','HepB0']},
+    {label:'6-week vaccines',ids:['OPV1','Penta1','IPV1','Rota1','PCV1']},
+    {label:'10-week vaccines',ids:['OPV2','Penta2','Rota2','PCV2']},
+    {label:'14-week vaccines',ids:['OPV3','Penta3','IPV2','Rota3','PCV3']},
+    {label:'9-month vaccines',ids:['MR1','YF','MenA']},
+    {label:'15-month vaccines',ids:['MR2']},
+  ];
+  var missedSeries=seriesGroups.filter(function(grp){
+    return grp.ids.some(function(id){return schedule[id]&&schedule[id].status==='defaulted';});
+  });
+  if(missedSeries.length>0){
+    catchupEl.style.display='block';
+    var seriesNames=missedSeries.map(function(g){return g.label;});
+    catchupEl.innerHTML='<strong>⚠ '+missedSeries.length+' Missed Series — Catch-up Needed:</strong><br>'
+      +seriesNames.join(', ')
+      +'<br><span style="font-weight:400;">Tap <b>+ Include Catch-up</b> below for a full visit-by-visit plan with next appointment.</span>';
+  } else {
+    catchupEl.style.display='none';
+  }
+
+  // Auto-detect zero dose
+  autoDetectZeroDose();
+}
+
+function selectDueOnly(){
+  clearVchips();
+  var dob=document.getElementById('n_dob').value;
+  var sex=document.getElementById('n_sex').value;
+  if(!dob){toast('Please enter date of birth first');return;}
+  var ageWeeks=Math.floor((new Date()-new Date(dob))/(7*24*3600*1000));
+  var schedule=computeSchedule(ageWeeks,sex);
+  EPI_SCHEDULE.forEach(function(v){
+    if(schedule[v.id]&&schedule[v.id].status==='due'){
+      var chip=document.getElementById('vc_'+v.id);
+      if(chip) chip.classList.add('on');
+    }
+  });
+  autoDetectZeroDose();
+  toast('Due vaccines selected');
+}
+
+function selectDueAndCatchup(){
+  clearVchips();
+  var dob=document.getElementById('n_dob').value;
+  var sex=document.getElementById('n_sex').value;
+  if(!dob){toast('Please enter date of birth first');return;}
+  var ageWeeks=Math.floor((new Date()-new Date(dob))/(7*24*3600*1000));
+  var schedule=computeSchedule(ageWeeks,sex);
+
+  // Always select due vaccines
+  EPI_SCHEDULE.forEach(function(v){
+    var s=schedule[v.id];
+    if(s&&s.status==='due'){
+      var chip=document.getElementById('vc_'+v.id);
+      if(chip) chip.classList.add('on');
+    }
+  });
+
+  // Always give BCG if missed (give same day)
+  var bcgStatus=schedule['BCG'];
+  if(bcgStatus&&bcgStatus.status==='defaulted'){
+    var bcgChip=document.getElementById('vc_BCG');
+    if(bcgChip) bcgChip.classList.add('on');
+  }
+
+  // Find the earliest missed series to start catch-up today
+  // Series order: Birth(0wk) > 6wk > 10wk > 14wk > 9m > 15m
+  var seriesGroups=[
+    {label:'Birth vaccines',ids:['OPV0','HepB0'],weeks:0},
+    {label:'6-week vaccines',ids:['OPV1','Penta1','IPV1','Rota1','PCV1'],weeks:6},
+    {label:'10-week vaccines',ids:['OPV2','Penta2','Rota2','PCV2'],weeks:10},
+    {label:'14-week vaccines',ids:['OPV3','Penta3','IPV2','Rota3','PCV3'],weeks:14},
+    {label:'9-month vaccines',ids:['MR1','YF','MenA'],weeks:39},
+    {label:'15-month vaccines',ids:['MR2'],weeks:65},
+  ];
+
+  // Find earliest missed series
+  var earliestMissed=null;
+  for(var i=0;i<seriesGroups.length;i++){
+    var grp=seriesGroups[i];
+    var anyMissed=grp.ids.some(function(id){return schedule[id]&&schedule[id].status==='defaulted';});
+    if(anyMissed){earliestMissed=grp;break;}
+  }
+
+  // Do NOT give missed series today — schedule them one per month
+  // Build catch-up plan and schedule next appointment
+  buildCatchupPlan(schedule, seriesGroups, null);
+  autoDetectZeroDose();
+  toast('Due vaccines + catch-up selected. See schedule below.');
+}
+
+function buildCatchupPlan(schedule, seriesGroups, startedToday){
+  var missedGroups=seriesGroups.filter(function(grp){
+    return grp.ids.some(function(id){return schedule[id]&&schedule[id].status==='defaulted';});
+  });
+
+  if(!missedGroups.length){
+    document.getElementById('catchup-note').style.display='none';
+    return;
+  }
+
+  // Remove the group given today from remaining
+  var remaining=missedGroups.filter(function(g){return !startedToday||g.label!==startedToday.label;});
+
+  // Build visit plan — one missed series per month
+  var planLines=[];
+  var nextDate=new Date();
+
+  // Today — due vaccines + BCG only
+  planLines.push('<b>Today:</b> Due vaccines + BCG (if missed)');
+
+  // All missed series scheduled one per month starting next month
+  missedGroups.forEach(function(grp){
+    nextDate=new Date(nextDate);
+    nextDate.setMonth(nextDate.getMonth()+1);
+    var mo=nextDate.toLocaleDateString('en-NG',{day:'2-digit',month:'short',year:'numeric'});
+    planLines.push('<b>~'+mo+':</b> '+grp.label+' ('+grp.ids.join(', ')+')');
+  });
+
+  // Set next appointment to 1 month from today (first missed series)
+  if(missedGroups.length>0){
+    var nxtAppt=new Date();
+    nxtAppt.setMonth(nxtAppt.getMonth()+1);
+    document.getElementById('n_nxt').value=nxtAppt.toISOString().split('T')[0];
+  }
+
+  var catchupEl=document.getElementById('catchup-note');
+  catchupEl.style.display='block';
+  catchupEl.innerHTML='<strong>⚠ Catch-up Schedule — '+missedGroups.length+' missed series:</strong><br>'
+    +planLines.join('<br>')
+    +'<br><br><span style="font-weight:400;font-size:11px;">Give one series per visit, approximately one month apart. Next appointment auto-set.</span>';
+}
+
 const SGRP=[
   {id:'BCG',name:'BCG'},{id:'OPV',name:'OPV'},{id:'IPV',name:'IPV'},{id:'HepB0',name:'Hep B0'},
   {id:'Penta',name:'Pentavalent'},{id:'PCV',name:'PCV10'},{id:'Rota',name:'Rotavirus'},
@@ -422,7 +746,7 @@ function setSS(state,lbl){
 }
 
 function calcAge(){
-  const dob=document.getElementById('n_dob').value;if(!dob)return;
+  const dob=document.getElementById('n_dob').value;if(!dob){applySchedule();return;}
   const b=new Date(dob),n=new Date();
   let y=n.getFullYear()-b.getFullYear(),m=n.getMonth()-b.getMonth();
   if(m<0){y--;m+=12;}
@@ -433,8 +757,8 @@ function calcAge(){
   else if(tot<9){nxt.setFullYear(b.getFullYear());nxt.setMonth(9);}
   else if(tot<15){nxt.setFullYear(b.getFullYear());nxt.setMonth(15);}
   if(nxt>n)document.getElementById('n_nxt').value=nxt.toISOString().split('T')[0];
-  // Auto-check zero dose based on age
-  autoDetectZeroDose();
+  // Apply smart schedule
+  applySchedule();
 }
 
 function autoDetectZeroDose(){
@@ -581,6 +905,7 @@ function clearForm(){
   document.getElementById('n_dt').value=today();
   document.getElementById('save-msg').textContent='';
   clearVchips();
+  applySchedule();
 }
 
 function renderReg(){

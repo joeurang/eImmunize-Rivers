@@ -1251,8 +1251,28 @@ window.onload=function(){
   document.getElementById('visitTime') && (document.getElementById('visitTime').value=nowTime());
   document.getElementById('stockDateReceived') && (document.getElementById('stockDateReceived').value=today());
   document.getElementById('loginPin').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+
+  // Restore session if already logged in
   const savedRole=sessionStorage.getItem('eimm_role');
-  if(savedRole){ document.getElementById('loginCode').value=savedRole==='sio'?CREDS.sio.code:CREDS.facility.code; }
+  if(savedRole){
+    currentRole=savedRole;
+    document.getElementById('loginCard').style.display='none';
+    document.getElementById('roleTag').style.display='';
+    if(currentRole==='facility'){
+      document.getElementById('roleTag').textContent='🏥 Facility';
+      document.getElementById('facilitySection').style.display='';
+      document.getElementById('facSessionDate').textContent=fmtDate(today());
+      buildGrid('vaccineGrid');
+      document.getElementById('visitDate').value=today();
+      document.getElementById('visitTime').value=nowTime();
+      loadFacStats();
+    } else {
+      document.getElementById('roleTag').textContent='📊 SIO / State';
+      document.getElementById('sioSection').style.display='';
+      document.getElementById('sioDate').textContent=fmtDate(today());
+      loadSIOData();
+    }
+  }
 };
 </script>
 </body>

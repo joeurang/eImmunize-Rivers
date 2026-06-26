@@ -334,7 +334,22 @@
   <!-- ALERT AREA -->
   <div id="alertArea"></div>
 
-  <!-- No login required -->
+  <!-- FACILITY LOGIN -->
+  <div class="card" id="loginCard">
+    <div class="card-title">🔐 Facility Access</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Facility Code</label>
+        <input type="text" id="facilityCode" placeholder="Enter facility code" />
+      </div>
+      <div class="form-group">
+        <label>PIN</label>
+        <input type="password" id="vaccinatorPin" placeholder="Enter PIN" maxlength="6"
+          onkeydown="if(event.key==='Enter') loginFacility()" />
+      </div>
+    </div>
+    <button class="btn btn-green" onclick="loginFacility()">Login →</button>
+  </div>
 
   <!-- MAIN SECTION (hidden until login) -->
   <div id="mainSection" style="display:none">
@@ -348,6 +363,7 @@
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <span style="font-size:11px; opacity:0.85;" id="sessionDateDisplay"></span>
+          <button class="btn btn-sm" style="background:rgba(255,255,255,0.2); color:white;" onclick="logout()">Logout</button>
         </div>
       </div>
     </div>
@@ -558,7 +574,12 @@
 </div>
 
 <script>
-// ─── SUPABASE CONFIG ───────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// ACCESS CREDENTIALS — change these to update login details
+// ═══════════════════════════════════════════════════════════════
+const ACCESS_CODE = 'RSPHCMB';   // ← Change facility code here
+const ACCESS_PIN  = '2024';       // ← Change PIN here
+// ═══════════════════════════════════════════════════════════════
 const SUPABASE_URL  = 'https://jojqqtncavxvykjxrcda.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpvanFxdG5jYXZ4dnlranhyY2RhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzMDMyMDQsImV4cCI6MjA5Njg3OTIwNH0.gQBD8bjUuVKHpnGQEf3X-I_RaIXQPTrxK2LsxoFLah0';
 
@@ -593,13 +614,12 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('visitTime').value = nowTime();
   document.getElementById('sessionDateDisplay').textContent = formatDate(today());
 
-  // Auto-start — no login required
-  currentFacility = {
-    facility_code: 'RSPHCMB',
-    facility_name: 'RSPHCMB eImmunize-Rivers',
-    lga: 'Rivers State'
-  };
-  showMainSection();
+  // Restore session if already logged in
+  const saved = sessionStorage.getItem('eimm_session');
+  if (saved) {
+    currentFacility = JSON.parse(saved);
+    showMainSection();
+  }
 });
 
 function today() {
@@ -688,46 +708,40 @@ function switchTab(name) {
 }
 
 // ─── LOGIN ───────────────────────────────────────────────────────
-async function loginFacility() {
-  const code = document.getElementById('facilityCode').value.trim();
+function loginFacility() {
+  const code = document.getElementById('facilityCode').value.trim().toUpperCase();
   const pin  = document.getElementById('vaccinatorPin').value.trim();
-  if (!code || !pin) { showAlert('Enter facility code and PIN.', 'error'); return; }
 
-  // For demo / offline, accept any code+pin and create a session
-  // In production, verify against Supabase facilities table
-  try {
-    const { data, error } = await supabase
-      .from('facilities')
-      .select('*')
-      .eq('facility_code', code)
-      .single();
-
-    if (error || !data) {
-      // Fallback: allow login with just code for demo
-      currentFacility = {
-        facility_code: code,
-        facility_name: `Facility ${code}`,
-        lga: 'Rivers State',
-        vaccinator_pin: pin
-      };
-    } else {
-      if (data.vaccinator_pin && data.vaccinator_pin !== pin) {
-        showAlert('Incorrect PIN. Please try again.', 'error'); return;
-      }
-      currentFacility = data;
-    }
-
-    localStorage.setItem('eimm_facility', JSON.stringify(currentFacility));
-    showMainSection();
-    showAlert(`Welcome! Logged in as ${currentFacility.facility_name}`, 'success');
-  } catch(e) {
-    currentFacility = { facility_code: code, facility_name: `Facility ${code}`, lga: 'Rivers State' };
-    localStorage.setItem('eimm_facility', JSON.stringify(currentFacility));
-    showMainSection();
+  if (!code || !pin) {
+    showAlert('Please enter both facility code and PIN.', 'error');
+    return;
   }
+  if (code !== ACCESS_CODE || pin !== ACCESS_PIN) {
+    showAlert('Incorrect facility code or PIN. Please try again.', 'error');
+    return;
+  }
+
+  currentFacility = {
+    facility_code: ACCESS_CODE,
+    facility_name: 'RSPHCMB eImmunize-Rivers',
+    lga: 'Rivers State'
+  };
+  sessionStorage.setItem('eimm_session', JSON.stringify(currentFacility));
+  showMainSection();
+  showAlert('Welcome! Logged in successfully.', 'success');
+}
+
+function logout() {
+  sessionStorage.removeItem('eimm_session');
+  currentFacility = null;
+  document.getElementById('loginCard').style.display = '';
+  document.getElementById('mainSection').style.display = 'none';
+  document.getElementById('facilityCode').value = '';
+  document.getElementById('vaccinatorPin').value = '';
 }
 
 function showMainSection() {
+  document.getElementById('loginCard').style.display = 'none';
   document.getElementById('mainSection').style.display = '';
   document.getElementById('facilityNameDisplay').textContent = currentFacility.facility_name || currentFacility.facility_code;
   document.getElementById('facilityLGADisplay').textContent = currentFacility.lga || '';

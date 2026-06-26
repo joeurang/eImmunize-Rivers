@@ -520,8 +520,11 @@ const CREDS = {
 
 const SUPABASE_URL  = 'https://jojqqtncavxvykjxrcda.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpvanFxdG5jYXZ4dnlranhyY2RhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzMDMyMDQsImV4cCI6MjA5Njg3OTIwNH0.gQBD8bjUuVKHpnGQEf3X-I_RaIXQPTrxK2LsxoFLah0';
-let db;
-try { db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON); } catch(e) { console.warn('DB init failed',e); }
+let db = null;
+function initDB() {
+  if(db) return;
+  try { db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON); } catch(e) { console.warn('DB init failed',e); }
+}
 
 // ── VACCINE SCHEDULE ──────────────────────────────────
 const SCHEDULE = [
@@ -606,6 +609,7 @@ function destroyChart(key) { if(charts[key]) { charts[key].destroy(); delete cha
 function doLogin() {
   const code=(document.getElementById('loginCode').value||'').trim().toUpperCase();
   const pin=(document.getElementById('loginPin').value||'').trim();
+  initDB();
   if(!code||!pin) { showAlert('Enter access code and PIN.','error'); return; }
   let matched=null;
   Object.values(CREDS).forEach(c => { if(c.code===code && c.pin===pin) matched=c; });
@@ -1255,6 +1259,7 @@ window.onload=function(){
   // Restore session if already logged in
   const savedRole=sessionStorage.getItem('eimm_role');
   if(savedRole){
+    initDB();
     currentRole=savedRole;
     document.getElementById('loginCard').style.display='none';
     document.getElementById('roleTag').style.display='';

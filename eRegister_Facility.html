@@ -129,8 +129,9 @@
     <div class="card" style="padding:10px 14px;background:var(--green);color:white;margin-bottom:12px;">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
         <div><strong>RSPHCMB eImmunize-Rivers</strong><span style="font-size:11px;opacity:0.85;margin-left:8px;">Rivers State</span></div>
-        <div style="display:flex;gap:8px;align-items:center;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <span style="font-size:11px;opacity:0.85;" id="facDate"></span>
+          <button class="btn btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.4);" id="gotoSIOBtn">📊 SIO Dashboard</button>
           <button class="btn btn-sm" style="background:rgba(255,255,255,0.2);color:white;" id="facLogout">Logout</button>
         </div>
       </div>
@@ -204,7 +205,7 @@
         <div class="info-box">
           <strong>MDVP Rules:</strong><br/>
           ❌ <strong>No MDVP (BCG 20D, MR1/MR2/YF/MenA 10D):</strong> Discard all unused doses after 6 hrs. Auto-wastage calculated per opened vial.<br/>
-          ✅ <strong>MDVP (OPV/Penta 10D, PCV 5D, Rota 10D, IPV 5D, HepB0/HPV single, Td 10D):</strong> Keep up to 28 days.
+          ✅ <strong>MDVP (OPV/Penta/HepB0 10D, PCV 5D, Rota 10D, IPV 5D, HPV single, Td 10D):</strong> Keep up to 28 days.
         </div>
         <div style="background:var(--green-light);border:1px solid var(--green-mid);border-radius:8px;padding:12px;margin-bottom:14px;">
           <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:10px;">➕ Add Stock Received / Record Wastage</div>
@@ -368,7 +369,7 @@ const ALL_VAX = SCHEDULE.flatMap(g => g.vax);
 const POLICY = {
   BCG:   {dpv:20, mdvp:false},
   OPV0:  {dpv:10, mdvp:true},  OPV1: {dpv:10,mdvp:true},  OPV2:{dpv:10,mdvp:true},  OPV3:{dpv:10,mdvp:true},
-  HepB0: {dpv:1,  mdvp:true},
+  HepB0: {dpv:10, mdvp:true},
   Penta1:{dpv:10, mdvp:true},  Penta2:{dpv:10,mdvp:true}, Penta3:{dpv:10,mdvp:true},
   PCV1:  {dpv:5,  mdvp:true},  PCV2:  {dpv:5, mdvp:true},  PCV3: {dpv:5, mdvp:true},
   Rota1: {dpv:10, mdvp:true},  Rota2: {dpv:10,mdvp:true},  Rota3:{dpv:10,mdvp:true},
@@ -428,6 +429,16 @@ function logout(){
   document.getElementById('loginPin').value='';
 }
 document.getElementById('facLogout').addEventListener('click', logout);
+document.getElementById('gotoSIOBtn').addEventListener('click', function(){
+  const pin = prompt('Enter SIO PIN to access State Dashboard:');
+  if(pin === SIO_PIN){
+    sessionStorage.setItem('eimm','sio');
+    document.getElementById('facSection').style.display='none';
+    role='sio'; openSIO();
+  } else if(pin !== null){
+    alert2('Incorrect SIO PIN.','error');
+  }
+});
 document.getElementById('sioLogout').addEventListener('click', logout);
 
 function openFacility(){
@@ -698,24 +709,69 @@ async function loadStk(){
   document.getElementById('stkLoading').style.display='none';
 }
 
+// Antigen family grouping for stock display
+const VAX_FAMILY = {
+  BCG:'BCG', 
+  OPV0:'OPV', OPV1:'OPV', OPV2:'OPV', OPV3:'OPV',
+  HepB0:'HepB0',
+  Penta1:'Penta', Penta2:'Penta', Penta3:'Penta',
+  PCV1:'PCV', PCV2:'PCV', PCV3:'PCV',
+  Rota1:'Rota', Rota2:'Rota', Rota3:'Rota',
+  IPV1:'IPV', IPV2:'IPV',
+  MR1:'MR', MR2:'MR',
+  YF:'YF', MenA:'MenA',
+  HPV:'HPV',
+  Td1:'Td', Td2:'Td', Td3:'Td', Td4:'Td', Td5:'Td',
+};
+
+// Unique antigen families in display order
+const FAMILIES = ['BCG','OPV','HepB0','Penta','PCV','Rota','IPV','MR','YF','MenA','HPV','Td'];
+
 function buildStkSum(entries, usedMap){
-  const map={};
+  // First build per-vaccine map
+  const vmap={};
   entries.forEach(function(e){
-    if(!map[e.vaccine]) map[e.vaccine]={vaccine:e.vaccine,recv:0,manWaste:0,thresh:e.low_threshold||20};
-    map[e.vaccine].recv+=e.doses_received||0;
-    map[e.vaccine].manWaste+=e.wastage_doses||0;
-    map[e.vaccine].thresh=e.low_threshold||map[e.vaccine].thresh;
+    if(!vmap[e.vaccine]) vmap[e.vaccine]={vaccine:e.vaccine,recv:0,manWaste:0,thresh:e.low_threshold||20};
+    vmap[e.vaccine].recv+=e.doses_received||0;
+    vmap[e.vaccine].manWaste+=e.wastage_doses||0;
+    vmap[e.vaccine].thresh=e.low_threshold||vmap[e.vaccine].thresh;
   });
-  ALL_VAX.forEach(function(v){ if(!map[v]) map[v]={vaccine:v,recv:0,manWaste:0,thresh:20}; });
-  return Object.values(map).map(function(s){
+  ALL_VAX.forEach(function(v){ if(!vmap[v]) vmap[v]={vaccine:v,recv:0,manWaste:0,thresh:20}; });
+
+  // Calculate per-vaccine stats
+  const perVax = Object.values(vmap).map(function(s){
     const p=POLICY[s.vaccine]||{dpv:1,mdvp:true};
     const used=usedMap[s.vaccine]||0;
     let autoW=0;
     if(!p.mdvp && p.dpv>1 && used>0){ autoW=(Math.ceil(used/p.dpv)*p.dpv)-used; }
     const totalW=s.manWaste+autoW;
     const bal=Math.max(0,s.recv-used-totalW);
-    return {...s,used,autoW,totalW,bal,mdvp:p.mdvp,dpv:p.dpv};
+    return {...s,used,autoW,totalW,bal,mdvp:p.mdvp,dpv:p.dpv,family:VAX_FAMILY[s.vaccine]||s.vaccine};
   });
+
+  // Now group by antigen family
+  const fmap={};
+  perVax.forEach(function(s){
+    const fam=s.family;
+    if(!fmap[fam]){
+      fmap[fam]={
+        family:fam, recv:0, used:0, manWaste:0, autoW:0, totalW:0, bal:0,
+        thresh:s.thresh, mdvp:s.mdvp, dpv:s.dpv,
+        doses:[] // individual vaccine doses for tooltip
+      };
+    }
+    fmap[fam].recv+=s.recv;
+    fmap[fam].used+=s.used;
+    fmap[fam].manWaste+=s.manWaste;
+    fmap[fam].autoW+=s.autoW;
+    fmap[fam].totalW+=s.totalW;
+    fmap[fam].bal+=s.bal;
+    fmap[fam].thresh=Math.max(fmap[fam].thresh, s.thresh);
+    fmap[fam].doses.push({vax:s.vaccine,used:s.used,bal:s.bal});
+  });
+
+  // Return in FAMILIES order
+  return FAMILIES.map(function(f){ return fmap[f] || {family:f,recv:0,used:0,manWaste:0,autoW:0,totalW:0,bal:0,thresh:20,mdvp:true,dpv:1,doses:[]}; });
 }
 
 function renderStk(sum){
@@ -728,8 +784,12 @@ function renderStk(sum){
     const rc=isCrit?'stock-crit':isLow?'stock-warn':'';
     const bc=isCrit?'crit':isLow?'low':'';
     const mdvpBdg=s.mdvp?'<span class="vax-badge mdvp">MDVP·28d</span>':'<span class="vax-badge nomdvp">No MDVP·6h</span>';
-    const autoCell=s.autoW>0?s.autoW+' <small style="color:var(--red)">(auto)</small>':s.autoW;
-    return '<tr class="'+rc+'"><td><strong>'+s.vaccine+'</strong><br/>'+mdvpBdg+'<span style="font-size:10px;color:var(--gray)"> '+s.dpv+'D/vial</span></td>'
+    const autoCell=s.autoW>0?s.autoW+' <small style="color:var(--red)">(auto)</small>':String(s.autoW);
+    // Dose breakdown tooltip
+    const breakdown=s.doses.map(d=>d.vax+': '+d.used+' used, '+d.bal+' bal').join(' | ');
+    return '<tr class="'+rc+'">'
+      +'<td><strong>'+s.family+'</strong><br/>'+mdvpBdg+'<span style="font-size:10px;color:var(--gray)"> '+s.dpv+'D/vial</span>'
+      +(breakdown?'<br/><span style="font-size:9px;color:var(--gray)" title="'+breakdown+'">▸ doses breakdown</span>':'')+'</td>'
       +'<td>'+(s.mdvp?'MDVP ✓':'No MDVP ⚠')+'<br/><small>'+(s.mdvp?'Keep 28d':'Discard 6h')+'</small></td>'
       +'<td>'+s.recv+'</td><td>'+s.used+'</td><td>'+s.manWaste+'</td><td>'+autoCell+'</td><td>'+s.totalW+'</td>'
       +'<td><strong>'+s.bal+'</strong></td><td><span class="'+sc+'">'+st+'</span></td>'
@@ -738,13 +798,13 @@ function renderStk(sum){
 }
 
 function renderStkAlerts(sum){
-  const alerts=sum.filter(s=>s.bal===0||s.bal<=s.thresh);
+  const alerts=sum.filter(s=>s.bal===0||s.bal<=s.thresh); // already grouped by family
   const card=document.getElementById('stkAlertCard');
   if(!alerts.length){ card.style.display='none'; return; }
   card.style.display='';
   document.getElementById('stkAlertList').innerHTML=alerts.map(function(s){
     const crit=s.bal===0;
-    return '<div style="background:'+(crit?'var(--red-light)':'var(--orange-light)')+';border:1px solid '+(crit?'#fca5a5':'#fbbf24')+';border-radius:7px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;"><div><strong style="color:'+(crit?'var(--red)':'#92400e')+'">'+s.vaccine+'</strong><div style="font-size:11px;color:var(--gray)">Balance: '+s.bal+' doses | Threshold: '+s.thresh+'</div></div><span class="badge '+(crit?'badge-red':'badge-orange')+'">'+(crit?'STOCK OUT':'LOW STOCK')+'</span></div>';
+    return '<div style="background:'+(crit?'var(--red-light)':'var(--orange-light)')+';border:1px solid '+(crit?'#fca5a5':'#fbbf24')+';border-radius:7px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;"><div><strong style="color:'+(crit?'var(--red)':'#92400e')+'">'+(s.family||s.vaccine)+'</strong><div style="font-size:11px;color:var(--gray)">Balance: '+s.bal+' doses | Threshold: '+s.thresh+'</div></div><span class="badge '+(crit?'badge-red':'badge-orange')+'">'+(crit?'STOCK OUT':'LOW STOCK')+'</span></div>';
   }).join('');
 }
 
